@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ts:
+    name: TypeScript (gateway + web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Test
+        run: pnpm -r test
+
+  docs:
+    name: Docs (cross-link + freshness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check AGENTS.md targets exist
+        run: |
+          # Every relative link in AGENTS.md must resolve.
+          # Real linter lands when the harness gardener does.
+          grep -oE '\]\(\./[^)]+\)' AGENTS.md | sed -E 's|\]\(\./([^)]+)\)|\1|' | while read -r path; do
+            if [ ! -e "$path" ]; then
+              echo "::error file=AGENTS.md::broken link: $path"
+              exit 1
+            fi
+          done
+
+  docker:
+    name: Docker build (gateway)
+    runs-on: ubuntu-latest
+    if: false  # enable when gateway/Dockerfile lands in Phase 2
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t openai-service-gateway:ci gateway/
+
+  migrations:
+    name: Migration check (drizzle)
+    runs-on: ubuntu-latest
+    if: false  # enable when gateway/migrations/ lands in Phase 4
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "drizzle-kit check goes here"

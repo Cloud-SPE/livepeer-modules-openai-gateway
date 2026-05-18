@@ -1,0 +1,5 @@
+packages:
+  - 'gateway'
+  - 'web/site'
+  - 'web/portal'
+  - 'web/admin'

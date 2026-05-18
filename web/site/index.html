@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAI Service — Drop-in OpenAI replacement, free during beta</title>
+  <meta name="description" content="Drop-in OpenAI-compatible inference gateway. Change your base URL, keep using the OpenAI SDKs. Free during beta.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext y='20' font-size='20'%3E🪶%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/index.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "lit": "https://esm.sh/lit@3.2.0",
+        "lit/decorators.js": "https://esm.sh/lit@3.2.0/decorators.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand">OpenAI Service</h1>
+    <nav>
+      <a href="/portal/" class="nav-link">Portal</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h2>Drop-in OpenAI replacement.</h2>
+      <p class="lead">Change your <code>base_url</code>, keep using the OpenAI SDK. Free during beta.</p>
+      <pre class="code"><code>from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-...",       <span class="muted"># yours, by email after admin approval</span>
+    base_url="https://api.example.com/v1",
+)
+
+resp = client.chat.completions.create(
+    model="qwen3:8b",
+    messages=[{"role": "user", "content": "hi"}],
+)</code></pre>
+    </section>
+
+    <section class="signup">
+      <h3>Request access</h3>
+      <p>Sign up to the waitlist. We email a verification link; once verified, an admin reviews your signup and emails an API key.</p>
+      <cc-signup-form></cc-signup-form>
+    </section>
+
+    <section class="endpoints">
+      <h3>OpenAI surface</h3>
+      <ul>
+        <li><code>POST /v1/chat/completions</code> — streaming + unary</li>
+        <li><code>POST /v1/embeddings</code></li>
+        <li><code>POST /v1/images/generations</code></li>
+        <li><code>POST /v1/audio/speech</code></li>
+        <li><code>POST /v1/audio/transcriptions</code></li>
+        <li><code>POST /v1/rerank</code></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>Backed by the <a href="https://livepeer.org">Livepeer</a> decentralized GPU network.</p>
+  </footer>
+
+  <script type="module" src="/components/cc-signup-form.js"></script>
+</body>
+</html>

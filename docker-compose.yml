@@ -1,0 +1,139 @@
+# OpenAI Service — root compose.
+#
+# Default `docker compose up` brings up:
+#   - db        (postgres:16-alpine)
+#   - gateway   (build from ./gateway/Dockerfile)
+#
+# The two Livepeer daemons live behind the `livepeer` profile. The
+# gateway boots fine without them (`/v1/*` returns 503 until they're
+# reachable). Bring them up with:
+#   docker compose --profile livepeer up -d
+#
+# Capability workers are external to this repository and compose stack.
+# Gateway expects on-chain capability providers by default.
+#
+# The three Lit SPAs run independently via `node dev-server.js` in each
+# web/ subdir; they're not in this stack.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: openai-service-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-openai_service}
+      POSTGRES_USER: ${POSTGRES_USER:-openai_service}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-dev-password}
+    volumes:
+      - openai-service-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openai_service}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: openai-service-gateway:${GATEWAY_TAG:-dev}
+    container_name: openai-service-gateway
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # ── server ──
+      PORT: "4000"
+      HOST: "0.0.0.0"
+      BASE_URL: ${BASE_URL:-http://localhost:4000}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:3000}
+      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://localhost:3001}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # ── data ──
+      DATABASE_URL: postgres://${POSTGRES_USER:-openai_service}:${POSTGRES_PASSWORD:-postgres-dev-password}@db:5432/${POSTGRES_DB:-openai_service}
+
+      # ── SaaS shell auth ──
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      API_KEY_HASH_PEPPER: ${API_KEY_HASH_PEPPER:-}
+      IP_HASH_PEPPER: ${IP_HASH_PEPPER:-}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-24}
+
+      # ── email (optional) ──
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      FROM_EMAIL: ${FROM_EMAIL:-OpenAI Service <noreply@example.com>}
+
+      # ── Livepeer plumbing ──
+      LIVEPEER_PAYER_DAEMON_SOCKET: /var/run/livepeer/payer-daemon.sock
+      LIVEPEER_RESOLVER_SOCKET: ${LIVEPEER_RESOLVER_SOCKET:-/var/run/livepeer/service-registry.sock}
+      REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
+
+      # ── /v1/* rate limit ──
+      V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
+      V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
+    volumes:
+      - livepeer-run:/var/run/livepeer
+    ports:
+      - "${GATEWAY_HOST_PORT:-4000}:4000"
+    restart: unless-stopped
+
+  service-registry-daemon:
+    image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.0}
+    container_name: openai-service-resolver
+    profiles: [livepeer]
+    restart: unless-stopped
+    environment:
+      CHAIN_RPC: ${CHAIN_RPC:-}
+      CHAIN_ID: ${CHAIN_ID:-42161}
+      LIVEPEER_RESOLVER_SOCKET: /var/run/livepeer/service-registry.sock
+    command:
+      - --mode=resolver
+      - --socket=/var/run/livepeer/service-registry.sock
+      - --store-path=/var/lib/livepeer/registry-cache.db
+      - --chain-rpc=${CHAIN_RPC:-}
+      - --chain-id=${CHAIN_ID:-42161}
+      - --controller-address=${CONTROLLER_ADDRESS:-0xD8E8328501E9645d16Cf49539efC04f734606ee4}
+      - --ai-service-registry-address=${AI_SERVICE_REGISTRY_ADDRESS:-}
+      - --discovery=chain
+      - --round-poll-interval=${ROUND_POLL_INTERVAL:-120s}
+      - --cache-manifest-ttl=${CACHE_MANIFEST_TTL:-5m}
+      - --manifest-max-bytes=${MANIFEST_MAX_BYTES:-1048576}
+      - --manifest-fetch-timeout=${MANIFEST_FETCH_TIMEOUT:-5s}
+      - --max-stale=${MAX_STALE:-30m}
+      - --reject-unsigned=true
+      - --log-level=${REGISTRY_LOG_LEVEL:-info}
+      - --log-format=${REGISTRY_LOG_FORMAT:-json}
+      - --metrics-listen=:${REGISTRY_METRICS_PORT:-9095}
+    volumes:
+      - livepeer-run:/var/run/livepeer
+      - openai-service-registry-cache:/var/lib/livepeer
+
+  payer-daemon:
+    image: tztcloud/livepeer-payment-daemon:${LIVEPEER_PAYER_DAEMON_TAG:-v1.3.0}
+    container_name: openai-service-payer
+    profiles: [livepeer]
+    restart: unless-stopped
+    environment:
+      CHAIN_RPC: ${CHAIN_RPC:-}
+      CHAIN_ID: ${CHAIN_ID:-42161}
+      LIVEPEER_PAYER_SOCKET: /var/run/livepeer/payer-daemon.sock
+      LIVEPEER_PAYER_KEYSTORE_PATH: /etc/livepeer/keystore.json
+      LIVEPEER_PAYER_KEYSTORE_PASSWORD_FILE: /etc/livepeer/keystore-password
+    command:
+      - --mode=sender
+      - --socket=/var/run/livepeer/payer-daemon.sock
+      - --chain-rpc=${CHAIN_RPC:-}
+      - --keystore-path=/etc/livepeer/keystore.json
+      - --keystore-password-file=/etc/livepeer/keystore-password
+    volumes:
+      - livepeer-run:/var/run/livepeer
+      - ${LIVEPEER_KEYSTORE_DIR:-./.dev/keystore}:/etc/livepeer:ro
+
+volumes:
+  openai-service-pgdata:
+  livepeer-run:
+  openai-service-registry-cache:
