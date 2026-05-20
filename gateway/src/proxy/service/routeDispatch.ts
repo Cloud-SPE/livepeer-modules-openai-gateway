@@ -3,7 +3,7 @@ import { LivepeerBrokerError } from "../livepeer/errors.js";
 import * as httpMultipart from "../livepeer/http-multipart.js";
 import * as httpReqresp from "../livepeer/http-reqresp.js";
 import * as httpStream from "../livepeer/http-stream.js";
-import { buildPayment } from "../livepeer/payment.js";
+import { buildPaymentBundle, reportInvalidRecipientRand } from "../livepeer/payment.js";
 
 interface DispatchCommon {
   routeSelector: RouteSelector;
@@ -40,30 +40,17 @@ export async function dispatchReqresp(opts: ReqRespDispatch): Promise<DispatchSu
     opts.routeSelector,
     { capability: opts.capability, offering: opts.offering, interactionMode: opts.interactionMode, request: opts.request },
     async (candidate) =>
-      httpReqresp.send({
-        brokerUrl: candidate.brokerUrl,
-        capability: candidate.capability,
-        offering: candidate.offering,
-        paymentBlob: await buildPayment({
-          route: {
-            capability: candidate.capability,
-            offering: candidate.offering,
-            recipientHex: candidate.ethAddress,
-            brokerUrl: candidate.brokerUrl,
-            pricePerWorkUnitWei: candidate.pricePerWorkUnitWei,
-            workUnit: candidate.workUnit,
-            unitsPerPrice: candidate.unitsPerPrice,
-            quoteId: candidate.quoteId,
-            quoteVersion: candidate.quoteVersion,
-            constraintFingerprint: candidate.constraintFingerprint,
-            routeFingerprint: candidate.routeFingerprint,
-          },
-          estimatedUnits: opts.estimatedUnits,
+      sendWithFreshPayment(candidate, opts.estimatedUnits, async (paymentBlob) =>
+        httpReqresp.send({
+          brokerUrl: candidate.brokerUrl,
+          capability: candidate.capability,
+          offering: candidate.offering,
+          paymentBlob,
+          body: opts.body,
+          contentType: opts.contentType,
+          requestId: opts.requestId,
         }),
-        body: opts.body,
-        contentType: opts.contentType,
-        requestId: opts.requestId,
-      }),
+      ),
   );
 }
 
@@ -72,30 +59,17 @@ export async function dispatchMultipart(opts: MultipartDispatch): Promise<Dispat
     opts.routeSelector,
     { capability: opts.capability, offering: opts.offering, interactionMode: opts.interactionMode, request: opts.request },
     async (candidate) =>
-      httpMultipart.send({
-        brokerUrl: candidate.brokerUrl,
-        capability: candidate.capability,
-        offering: candidate.offering,
-        paymentBlob: await buildPayment({
-          route: {
-            capability: candidate.capability,
-            offering: candidate.offering,
-            recipientHex: candidate.ethAddress,
-            brokerUrl: candidate.brokerUrl,
-            pricePerWorkUnitWei: candidate.pricePerWorkUnitWei,
-            workUnit: candidate.workUnit,
-            unitsPerPrice: candidate.unitsPerPrice,
-            quoteId: candidate.quoteId,
-            quoteVersion: candidate.quoteVersion,
-            constraintFingerprint: candidate.constraintFingerprint,
-            routeFingerprint: candidate.routeFingerprint,
-          },
-          estimatedUnits: opts.estimatedUnits,
+      sendWithFreshPayment(candidate, opts.estimatedUnits, async (paymentBlob) =>
+        httpMultipart.send({
+          brokerUrl: candidate.brokerUrl,
+          capability: candidate.capability,
+          offering: candidate.offering,
+          paymentBlob,
+          body: opts.body,
+          contentType: opts.contentType,
+          requestId: opts.requestId,
         }),
-        body: opts.body,
-        contentType: opts.contentType,
-        requestId: opts.requestId,
-      }),
+      ),
   );
 }
 
@@ -104,31 +78,68 @@ export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSucc
     opts.routeSelector,
     { capability: opts.capability, offering: opts.offering, interactionMode: opts.interactionMode, request: opts.request },
     async (candidate) =>
-      httpStream.sendStreaming({
-        brokerUrl: candidate.brokerUrl,
+      sendWithFreshPayment(candidate, opts.estimatedUnits, async (paymentBlob) =>
+        httpStream.sendStreaming({
+          brokerUrl: candidate.brokerUrl,
+          capability: candidate.capability,
+          offering: candidate.offering,
+          paymentBlob,
+          body: opts.body,
+          contentType: opts.contentType,
+          requestId: opts.requestId,
+        }),
+      ),
+  );
+}
+
+async function sendWithFreshPayment<T>(
+  candidate: RouteCandidate,
+  estimatedUnits: number,
+  send: (paymentBlob: string) => Promise<T>,
+): Promise<T> {
+  let retryUsed = false;
+  for (;;) {
+    const built = await buildPaymentBundle({
+      route: {
         capability: candidate.capability,
         offering: candidate.offering,
-        paymentBlob: await buildPayment({
-          route: {
-            capability: candidate.capability,
-            offering: candidate.offering,
-            recipientHex: candidate.ethAddress,
-            brokerUrl: candidate.brokerUrl,
-            pricePerWorkUnitWei: candidate.pricePerWorkUnitWei,
-            workUnit: candidate.workUnit,
-            unitsPerPrice: candidate.unitsPerPrice,
-            quoteId: candidate.quoteId,
-            quoteVersion: candidate.quoteVersion,
-            constraintFingerprint: candidate.constraintFingerprint,
-            routeFingerprint: candidate.routeFingerprint,
-          },
-          estimatedUnits: opts.estimatedUnits,
-        }),
-        body: opts.body,
-        contentType: opts.contentType,
-        requestId: opts.requestId,
-      }),
-  );
+        recipientHex: candidate.ethAddress,
+        brokerUrl: candidate.brokerUrl,
+        pricePerWorkUnitWei: candidate.pricePerWorkUnitWei,
+        workUnit: candidate.workUnit,
+        unitsPerPrice: candidate.unitsPerPrice,
+        quoteId: candidate.quoteId,
+        quoteVersion: candidate.quoteVersion,
+        constraintFingerprint: candidate.constraintFingerprint,
+        routeFingerprint: candidate.routeFingerprint,
+      },
+      estimatedUnits,
+    });
+    try {
+      return await send(built.paymentBlob);
+    } catch (err) {
+      if (!shouldRefreshPaymentSession(err, built.workId, retryUsed)) {
+        throw err;
+      }
+      retryUsed = true;
+      await reportInvalidRecipientRand({
+        workId: built.workId!,
+        capability: candidate.capability,
+        offering: candidate.offering,
+      });
+    }
+  }
+}
+
+function shouldRefreshPaymentSession(
+  err: unknown,
+  workId: string | undefined,
+  retryUsed: boolean,
+): boolean {
+  if (retryUsed || !workId) return false;
+  if (!(err instanceof LivepeerBrokerError)) return false;
+  if (err.status !== 401 || err.code !== "payment_invalid") return false;
+  return err.message.includes("INVALID_RECIPIENT_RAND") || err.responseBody.includes("INVALID_RECIPIENT_RAND");
 }
 
 export async function selectRealtimeCandidate(

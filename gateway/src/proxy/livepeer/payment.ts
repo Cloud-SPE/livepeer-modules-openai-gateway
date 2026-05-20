@@ -20,10 +20,20 @@ const PROTO_FILES = [
   "livepeer/payments/v1/payer_daemon.proto",
 ];
 
+interface PaymentWire {
+  ticketParams?: {
+    recipientRandHash?: Buffer | Uint8Array | string;
+  };
+}
+
 interface PayerDaemonClient extends grpc.Client {
   createPayment(
     req: CreatePaymentRequest,
     cb: (err: grpc.ServiceError | null, resp: CreatePaymentResponse) => void,
+  ): void;
+  reportPaymentResult(
+    req: ReportPaymentResultRequest,
+    cb: (err: grpc.ServiceError | null, resp: ReportPaymentResultResponse) => void,
   ): void;
   health(
     req: Record<string, never>,
@@ -71,6 +81,18 @@ interface CreatePaymentResponse {
   expectedValue: BigUInt;
   fundedValueWei: BigUInt;
   acceptedQuoteRef: QuoteRef;
+  workId?: string;
+  work_id?: string;
+}
+
+interface ReportPaymentResultRequest {
+  workId: string;
+  capability: string;
+  offering: string;
+  rejectionReason: string;
+}
+
+interface ReportPaymentResultResponse {
 }
 
 interface HealthResponse {
@@ -91,7 +113,13 @@ export interface PaymentRouteQuote {
   routeFingerprint: Uint8Array;
 }
 
+export interface BuiltPayment {
+  paymentBlob: string;
+  workId?: string;
+}
+
 let cachedClient: PayerDaemonClient | null = null;
+let paymentDeserializer: ((bytes: Buffer) => PaymentWire) | null = null;
 
 interface InitOptions {
   socketPath: string;
@@ -110,9 +138,17 @@ export async function init(opts: InitOptions): Promise<void> {
     includeDirs: [opts.protoRoot ?? PROTO_ROOT],
   });
   const proto = grpc.loadPackageDefinition(def) as unknown as {
-    livepeer: { payments: { v1: { PayerDaemon: grpc.ServiceClientConstructor } } };
+    livepeer: {
+      payments: {
+        v1: {
+          PayerDaemon: grpc.ServiceClientConstructor;
+          Payment: { deserialize: (bytes: Buffer) => PaymentWire };
+        };
+      };
+    };
   };
   const ClientCtor = proto.livepeer.payments.v1.PayerDaemon;
+  paymentDeserializer = proto.livepeer.payments.v1.Payment.deserialize;
   const client = new ClientCtor(
     `unix:${opts.socketPath}`,
     grpc.credentials.createInsecure(),
@@ -129,12 +165,21 @@ export function shutdown(): void {
     cachedClient.close();
     cachedClient = null;
   }
+  paymentDeserializer = null;
 }
 
 export async function buildPayment(inputs: {
   route: PaymentRouteQuote;
   estimatedUnits: number;
 }): Promise<string> {
+  const built = await buildPaymentBundle(inputs);
+  return built.paymentBlob;
+}
+
+export async function buildPaymentBundle(inputs: {
+  route: PaymentRouteQuote;
+  estimatedUnits: number;
+}): Promise<BuiltPayment> {
   if (!cachedClient) {
     throw new Error("buildPayment: payer-daemon client not initialized; call init() first");
   }
@@ -171,7 +216,43 @@ export async function buildPayment(inputs: {
   const resp = await new Promise<CreatePaymentResponse>((res, rej) => {
     cachedClient!.createPayment(req, (err, r) => (err ? rej(err) : res(r)));
   });
-  return Buffer.from(resp.paymentBytes).toString("base64");
+  const paymentBytes = Buffer.from(resp.paymentBytes);
+  return {
+    paymentBlob: paymentBytes.toString("base64"),
+    workId: firstNonEmptyString(resp.workId, resp.work_id, deriveWorkId(paymentBytes)),
+  };
+}
+
+export async function reportInvalidRecipientRand(inputs: {
+  workId: string;
+  capability: string;
+  offering: string;
+}): Promise<void> {
+  if (!cachedClient) {
+    throw new Error("reportInvalidRecipientRand: payer-daemon client not initialized; call init() first");
+  }
+
+  await new Promise<void>((res, rej) => {
+    cachedClient!.reportPaymentResult(
+      {
+        workId: inputs.workId,
+        capability: inputs.capability,
+        offering: inputs.offering,
+        rejectionReason: "PAYMENT_REJECTION_REASON_INVALID_RECIPIENT_RAND",
+      },
+      (err) => {
+        if (!err) {
+          res();
+          return;
+        }
+        if (err.code === grpc.status.ABORTED) {
+          res();
+          return;
+        }
+        rej(err);
+      },
+    );
+  });
 }
 
 function bigintToBigEndian(n: bigint): Buffer {
@@ -203,4 +284,31 @@ function safeBigInt(value: string): bigint {
 
 function ceilDivBigInt(a: bigint, b: bigint): bigint {
   return (a + b - 1n) / b;
+}
+
+function deriveWorkId(paymentBytes: Buffer): string | undefined {
+  if (!paymentDeserializer) return undefined;
+  try {
+    const payment = paymentDeserializer(paymentBytes);
+    const raw = payment.ticketParams?.recipientRandHash;
+    const buf = toBuffer(raw);
+    if (!buf || buf.length === 0) return undefined;
+    return buf.toString("hex");
+  } catch {
+    return undefined;
+  }
+}
+
+function toBuffer(raw: Buffer | Uint8Array | string | undefined): Buffer | undefined {
+  if (!raw) return undefined;
+  if (Buffer.isBuffer(raw)) return raw;
+  if (raw instanceof Uint8Array) return Buffer.from(raw);
+  return Buffer.from(raw, "base64");
+}
+
+function firstNonEmptyString(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
 }
