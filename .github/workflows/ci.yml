@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -53,18 +54,57 @@ jobs:
             fi
           done
 
-  docker:
+  docker-build:
     name: Docker build (gateway)
     runs-on: ubuntu-latest
-    if: false  # enable when gateway/Dockerfile lands in Phase 2
+    needs: [ts]
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t openai-service-gateway:ci gateway/
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: gateway/Dockerfile
+          push: false
+          tags: openai-service-gateway:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  migrations:
-    name: Migration check (drizzle)
+  docker-publish:
+    name: Docker publish (gateway)
     runs-on: ubuntu-latest
-    if: false  # enable when gateway/migrations/ lands in Phase 4
+    needs: [ts, docs, docker-build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - run: echo "drizzle-kit check goes here"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push (multi-arch)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: gateway/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            tztcloud/openai-service-gateway:${{ steps.meta.outputs.version }}
+            tztcloud/openai-service-gateway:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
