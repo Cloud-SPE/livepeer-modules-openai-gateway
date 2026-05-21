@@ -48,16 +48,6 @@ the smoke script.
 runs `docker compose up -d`, waits for health, runs
 `scripts/smoke.sh`. ~25 lines of YAML.
 
-### CI: `docker` + `migrations` jobs gated off
-
-**Found**: 2026-05-18
-**Impact**: `if: false` on two jobs in `ci.yml`. Image build
-isn't validated per-PR; migration syntax errors slip past lint.
-**Surface**: `.github/workflows/ci.yml` lines tagged `if: false`.
-**Fix shape**: Flip the flag once we have a `migrations` linter
-(drizzle-kit check) and a buildx target. Done with the smoke
-work above is natural.
-
 ### SPA client generation from OpenAPI
 
 **Found**: 2026-05-18 (during plan 0002)
