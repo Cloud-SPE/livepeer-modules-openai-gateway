@@ -3,10 +3,8 @@
 // Approval flow:
 //   1. Admin sees pending+verified rows in /admin/waitlist?status=pending
 //   2. Admin POSTs /admin/waitlist/:id/approve
-//   3. Server: verify email_verified_at IS NOT NULL (decision locked: no
-//      unverified approvals).
-//   4. Generate API key → insert api_keys row → set waitlist.status='approved'.
-//   5. Email plaintext key to user.
+//   3. Generate API key → insert api_keys row → set waitlist.status='approved'.
+//   4. Email plaintext key to user.
 
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -20,7 +18,6 @@ import * as waitlistRepo from '../../repo/waitlist.js';
 import { waitlist } from '../../schema/index.js';
 import {
   ErrorBody,
-  OkBody,
   PaginationQuery,
   UuidParam,
   WaitlistRow,
@@ -33,6 +30,25 @@ const ListQuery = PaginationQuery.extend({
 const ListResponse = z
   .object({ data: z.array(WaitlistRow) })
   .meta({ id: 'AdminWaitlistList' });
+
+const ApproveResponse = z
+  .object({
+    ok: z.literal(true),
+    apiKey: z.object({
+      plaintextKey: z.string(),
+      keyPrefix: z.string(),
+    }),
+    emailDelivery: z.object({
+      status: z.enum(['sent', 'logged', 'failed']),
+      message: z.string(),
+    }),
+  })
+  .meta({ id: 'AdminWaitlistApprove' });
+
+const OkBody = z.object({ ok: z.literal(true) }).meta({
+  id: 'AdminOkBody',
+  description: 'Generic acknowledgement.',
+});
 
 const ADMIN_SECURITY = [{ adminToken: [] as string[] }];
 
@@ -82,12 +98,12 @@ export async function registerAdminWaitlistRoutes(
         tags: ['admin'],
         summary: 'Approve a waitlist row',
         description:
-          'Refuses unverified rows with 409. On success: mints an API key, ' +
-          'emails the plaintext to the user, sets status=approved.',
+          'Mints an API key, emails the plaintext to the user, and sets ' +
+          'status=approved. Email verification is not required.',
         security: ADMIN_SECURITY,
         params: UuidParam,
         response: {
-          200: OkBody,
+          200: ApproveResponse,
           401: ErrorBody,
           404: ErrorBody,
           409: ErrorBody,
@@ -111,16 +127,6 @@ export async function registerAdminWaitlistRoutes(
           },
         });
       }
-      if (!row.emailVerifiedAt) {
-        return reply.code(409).send({
-          error: {
-            message: 'email not verified — cannot approve unverified users',
-            type: 'invalid_request_error',
-            code: 'email_not_verified',
-          },
-        });
-      }
-
       const { plaintext, prefix, hash } = generateApiKey(deps.config.apiKeyHashPepper);
       await deps.db.transaction(async () => {
         await apiKeysRepo.create(deps.db, {
@@ -132,6 +138,17 @@ export async function registerAdminWaitlistRoutes(
         await waitlistRepo.approve(deps.db, row.id, 'admin-token');
       });
 
+      let emailDelivery:
+        | { status: 'sent' | 'logged' | 'failed'; message: string } = deps.email.enabled
+        ? {
+            status: 'sent',
+            message: 'API key email sent to the user.',
+          }
+        : {
+            status: 'logged',
+            message:
+              'Email delivery is disabled because RESEND_API_KEY is unset. Hand the key to the user now.',
+          };
       try {
         await deps.email.sendApiKey({
           email: row.email,
@@ -144,8 +161,19 @@ export async function registerAdminWaitlistRoutes(
           { err, email: row.email },
           'api-key delivery email failed — admin must hand-deliver',
         );
+        emailDelivery = {
+          status: 'failed',
+          message: 'API key email failed. Hand the key to the user now.',
+        };
       }
-      return { ok: true as const };
+      return {
+        ok: true as const,
+        apiKey: {
+          plaintextKey: plaintext,
+          keyPrefix: prefix,
+        },
+        emailDelivery,
+      };
     },
   );
 

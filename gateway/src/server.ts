@@ -99,7 +99,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         title: 'OpenAI Service — operator + portal API',
         description:
           'Non-OpenAI surfaces hosted by the gateway. `/v1/*` follows OpenAI\'s spec.',
-        version: '0.1.0',
+        version: '1.3.1',
       },
       servers: [{ url: config.baseUrl }],
       tags: [

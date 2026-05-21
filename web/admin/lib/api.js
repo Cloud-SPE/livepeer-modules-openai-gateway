@@ -13,14 +13,15 @@ export function setToken(t) {
 
 export async function api(path, opts = {}) {
   const token = getToken();
+  const hasBody = opts.body !== undefined;
   const res = await fetch(path, {
     method: opts.method ?? 'GET',
     headers: {
-      'Content-Type': 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { 'X-Admin-Token': token } : {}),
       ...(opts.headers ?? {}),
     },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
+    body: hasBody ? JSON.stringify(opts.body) : undefined,
   });
   let payload = null;
   try { payload = await res.json(); } catch { payload = null; }

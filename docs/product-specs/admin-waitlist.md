@@ -9,7 +9,7 @@ routing.
 ## What
 
 - See pending waitlist rows (and verified-vs-unverified status)
-- Approve verified rows (mints + emails an API key)
+- Approve any pending row (mints + emails an API key)
 - Reject rows
 - Resend a verification email
 - See approved users, their keys, their usage summary
@@ -43,11 +43,13 @@ running. Polish optional; correctness mandatory.
 1. Operator signs in: paste ADMIN_TOKEN, stored in localStorage.
 2. Land on #/waitlist with the pending filter active.
 3. Review the row: name, email, verified pill.
-4. If unverified, the only action is "Resend" (verification email).
-5. If verified, click "Approve" → server mints an API key in a
-   transaction with the status change, then emails the plaintext key
-   to the user.
-6. Row moves to status=approved; appears in #/users.
+4. If unverified, the operator may resend verification or approve
+   directly.
+5. Click "Approve" → server mints an API key in a transaction with
+   the status change, then emails the plaintext key to the user.
+6. The admin UI also shows the one-time plaintext key immediately so
+   the operator can hand-deliver it if email is disabled or fails.
+7. Row moves to status=approved; appears in #/users.
 ```
 
 ## User flow — debugging routing
@@ -79,12 +81,12 @@ running. Polish optional; correctness mandatory.
   constant-time comparison.
 - With `ADMIN_TOKEN` unset on the server, every `/admin/*` returns
   `503 admin disabled (no ADMIN_TOKEN)`.
-- Approve is disabled in the UI for unverified rows and refused
-  server-side with `409 email not verified`.
+- Approve stays clickable for unverified rows and succeeds
+  server-side.
 - Approve is atomic: api_keys row + waitlist status change happen in
   one transaction.
-- After approve, the plaintext key never appears in any admin
-  endpoint response — only via the email (or stdout fallback).
+- Approve returns the plaintext key exactly once in the immediate
+  response; later admin surfaces show only the safe prefix.
 - Reject is reversible by editing the row in the DB; v1 doesn't ship
   an unreject button.
 - Registry candidate endpoint reflects the resolver's current live
@@ -100,7 +102,7 @@ running. Polish optional; correctness mandatory.
 
 | Case | Behavior |
 |---|---|
-| Approve fails because email send fails | API-key row + status change are NOT rolled back. Admin must hand-deliver the key from the gateway log. We log loudly. |
+| Approve fails because email send fails | API-key row + status change are NOT rolled back. Admin must hand-deliver the key from the approval response. We log loudly. |
 | Operator rejects a row that's already approved | `409 already approved`. (Currently we don't have this check on reject — TODO for the approve path; reject simply runs the UPDATE.) |
 | Operator resends to an already-verified user | `409 already verified`. |
 | Two operators approve the same row concurrently | Second loses with `409 already approved`. |

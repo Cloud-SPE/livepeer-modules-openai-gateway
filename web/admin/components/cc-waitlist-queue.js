@@ -7,6 +7,7 @@ class CcWaitlistQueue extends LitElement {
     rows: { state: true },
     error: { state: true },
     busyId: { state: true },
+    approvalResult: { state: true },
   };
 
   constructor() {
@@ -15,6 +16,7 @@ class CcWaitlistQueue extends LitElement {
     this.rows = [];
     this.error = '';
     this.busyId = null;
+    this.approvalResult = null;
   }
 
   createRenderRoot() { return this; }
@@ -41,8 +43,10 @@ class CcWaitlistQueue extends LitElement {
   #act = async (id, action) => {
     this.busyId = id;
     this.error = '';
+    if (action === 'approve') this.approvalResult = null;
     try {
-      await api(`/admin/waitlist/${id}/${action}`, { method: 'POST' });
+      const result = await api(`/admin/waitlist/${id}/${action}`, { method: 'POST' });
+      if (action === 'approve') this.approvalResult = result;
       await this.#load();
     } catch (err) {
       this.error = err.message;
@@ -58,7 +62,8 @@ class CcWaitlistQueue extends LitElement {
         <p class="msg">
           Review inbound signups, confirm verification state, and decide whether an
           account should be approved for API access. Approval mints an API key and
-          triggers delivery through the configured email path.
+          returns the one-time plaintext key here so operations can still proceed if
+          email delivery is disabled or fails.
         </p>
         <div class="filter-bar">
           ${['pending', 'approved', 'rejected'].map(
@@ -69,6 +74,14 @@ class CcWaitlistQueue extends LitElement {
           )}
         </div>
         ${this.error ? html`<p class="msg error">${this.error}</p>` : ''}
+        ${this.approvalResult
+          ? html`<div class="card">
+              <h3>Latest approved key</h3>
+              <p class="msg">${this.approvalResult.emailDelivery.message}</p>
+              <p><strong>Copy now.</strong> This plaintext key is not recoverable later.</p>
+              <pre>${this.approvalResult.apiKey.plaintextKey}</pre>
+            </div>`
+          : ''}
         ${this.rows.length === 0
           ? html`<p class="msg">No ${this.status} rows.</p>`
           : html`<table>
@@ -92,9 +105,9 @@ class CcWaitlistQueue extends LitElement {
                   <td>${new Date(r.createdAt).toLocaleString()}</td>
                   <td>${r.approvedAt ? new Date(r.approvedAt).toLocaleString() : ''}</td>
                   <td>
-                    ${this.status === 'pending'
+                        ${this.status === 'pending'
                       ? html`
-                          <button class="primary" ?disabled=${!r.emailVerifiedAt || this.busyId === r.id}
+                          <button class="primary" ?disabled=${this.busyId === r.id}
                             @click=${() => this.#act(r.id, 'approve')}>Approve</button>
                           <button class="ghost danger" ?disabled=${this.busyId === r.id}
                             @click=${() => this.#act(r.id, 'reject')}>Reject</button>
