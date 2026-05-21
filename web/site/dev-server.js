@@ -1,6 +1,6 @@
 // Tiny zero-dep dev server: serves static files from this directory,
-// proxies /api/* to the gateway. Production deploys serve the static
-// files via a CDN or any HTTP server.
+// proxies /api/* to the gateway. Shipped gateway builds serve the
+// checked-in static files themselves.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -10,7 +10,7 @@ import { request as httpRequest } from 'node:http';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3000);
-const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4000';
+const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4001';
 const PROXY_PREFIXES = ['/api/'];
 
 const MIME = {

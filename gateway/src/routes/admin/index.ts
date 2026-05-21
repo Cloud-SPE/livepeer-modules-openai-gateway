@@ -16,6 +16,7 @@ export async function registerAdminRoutes(
   // Single gate on every /admin/* route.
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/admin/')) return;
+    if (req.url === '/admin/' || req.url.startsWith('/admin/static/')) return;
     await requireAdminToken(deps)(req, reply);
   });
 

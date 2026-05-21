@@ -13,7 +13,7 @@ help:
 	@echo "  make build       build all workspace packages"
 	@echo "  make lint        run tsc / linters across the workspace"
 	@echo "  make test        run all tests"
-	@echo "  make dev         bring up gateway + postgres via docker compose"
+	@echo "  make dev         bring up the full local stack via docker compose"
 	@echo "  make down        tear down dev compose stack"
 	@echo "  make logs        tail dev compose logs"
 	@echo "  make smoke       end-to-end smoke test against the dev stack"
@@ -36,7 +36,7 @@ test:
 	pnpm -r test
 
 dev:
-	docker compose --profile livepeer up -d
+	docker compose up -d
 
 down:
 	docker compose down

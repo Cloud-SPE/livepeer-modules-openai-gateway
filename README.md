@@ -25,6 +25,7 @@ This repo contains:
   - the OpenAI-compatible `/v1/*` API
   - a waitlist / verify / approve / API-key shell
   - portal and admin backend routes
+  - production serving for `web/site`, `web/portal`, and `web/admin`
   - resolver and payer daemon clients
 - `web/site/`: zero-build Lit marketing and waitlist site
 - `web/portal/`: zero-build Lit user portal with account, keys, health,
@@ -84,9 +85,9 @@ flowchart LR
   PortalUser[Approved user] -->|/portal/* + /v1/*| GW
   AdminUser[Operator] -->|/admin/*| GW
 
-  SITE[web/site] -->|proxied API calls| GW
-  PORTAL[web/portal] -->|proxied API calls| GW
-  ADMIN[web/admin] -->|proxied API calls| GW
+  SITE[web/site] -->|served by gateway| GW
+  PORTAL[web/portal] -->|served by gateway| GW
+  ADMIN[web/admin] -->|served by gateway| GW
 
   GW --> DB[(Postgres)]
   GW --> REG[service-registry-daemon]
@@ -289,7 +290,6 @@ The main groups are:
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
-- `POSTGRES_HOST_PORT`
 
 ### SaaS shell secrets
 
@@ -374,13 +374,13 @@ and payer daemon stack.
 ### 3. Start the backend stack
 
 ```bash
-docker compose --profile livepeer up -d --build
+docker compose up -d --build
 ```
 
 Check health:
 
 ```bash
-curl http://localhost:4000/health
+curl http://localhost:4001/health
 ```
 
 ### 4. Start the web apps
@@ -400,10 +400,11 @@ cd web/admin && node dev-server.js
 ```
 
 Default local ports:
-- site: `http://localhost:3000`
-- portal: `http://localhost:3001`
-- admin: `http://localhost:3002`
-- gateway: `http://localhost:4000`
+- gateway-served site: `http://localhost:4001`
+- gateway-served portal: `http://localhost:4001/portal/`
+- gateway-served admin: `http://localhost:4001/admin/`
+- optional split dev servers:
+  `http://localhost:3000`, `http://localhost:3001`, `http://localhost:3002`
 
 Convenience targets:
 - `make site-ui`
@@ -413,7 +414,7 @@ Convenience targets:
 ### 5. Verify the catalog
 
 ```bash
-curl http://localhost:4000/v1/models
+curl http://localhost:4001/v1/models
 ```
 
 Important:

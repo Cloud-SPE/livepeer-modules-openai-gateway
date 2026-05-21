@@ -3,10 +3,14 @@
 
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
+import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import { access } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   jsonSchemaTransform,
   serializerCompiler,
@@ -50,6 +54,12 @@ declare module 'fastify' {
   }
 }
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WEB_ROOT = resolve(__dirname, '../../web');
+const SITE_ROOT = resolve(WEB_ROOT, 'site');
+const PORTAL_ROOT = resolve(WEB_ROOT, 'portal');
+const ADMIN_ROOT = resolve(WEB_ROOT, 'admin');
+
 export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   const { config } = deps;
 
@@ -74,6 +84,10 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   });
 
   await app.register(cookie);
+  await app.register(fastifyStatic, {
+    root: SITE_ROOT,
+    serve: false,
+  });
 
   // ── OpenAPI ────────────────────────────────────────────────────
   // Documents `/api/*`, `/portal/*`, `/admin/*`. Excludes `/v1/*`
@@ -131,6 +145,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   await registerHealthRoutes(app);
   await registerModelsRoute(app, deps);
   await registerMetricsRoute(app, deps);
+  registerSpaRoutes(app);
 
   // ── Public (no auth) ─────────────────────────────────────────────
   await registerWaitlistRoutes(app, deps);
@@ -150,4 +165,86 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
   await registerProxyRoutes(app, deps);
 
   return app;
+}
+
+function registerSpaRoutes(app: FastifyInstance): void {
+  app.get('/portal', async (_req, reply) => reply.redirect('/portal/'));
+  app.get('/admin', async (_req, reply) => reply.redirect('/admin/'));
+
+  app.get('/portal/', async (_req, reply) =>
+    reply.type('text/html; charset=utf-8').sendFile('index.html', PORTAL_ROOT, {
+      maxAge: 0,
+      immutable: false,
+    }),
+  );
+  app.get('/admin/', async (_req, reply) =>
+    reply.type('text/html; charset=utf-8').sendFile('index.html', ADMIN_ROOT, {
+      maxAge: 0,
+      immutable: false,
+    }),
+  );
+
+  app.get('/portal/static/*', async (req, reply) => {
+    const assetPath = trimPrefix(req.raw.url ?? req.url, '/portal/static/');
+    if (!assetPath || !(await fileExists(PORTAL_ROOT, assetPath))) {
+      return reply.code(404).send({ error: 'not_found', message: 'Not found.' });
+    }
+    return reply.sendFile(assetPath, PORTAL_ROOT);
+  });
+
+  app.get('/admin/static/*', async (req, reply) => {
+    const assetPath = trimPrefix(req.raw.url ?? req.url, '/admin/static/');
+    if (!assetPath || !(await fileExists(ADMIN_ROOT, assetPath))) {
+      return reply.code(404).send({ error: 'not_found', message: 'Not found.' });
+    }
+    return reply.sendFile(assetPath, ADMIN_ROOT);
+  });
+
+  app.get('/*', async (req, reply) => {
+    const url = new URL(req.raw.url ?? req.url, 'http://localhost');
+    const pathname = url.pathname;
+    if (isReservedPath(pathname)) {
+      return reply.code(404).send({ error: 'not_found', message: 'Not found.' });
+    }
+
+    const sitePath = pathname === '/' ? 'index.html' : pathname.slice(1);
+    if (await fileExists(SITE_ROOT, sitePath)) {
+      return reply.sendFile(sitePath, SITE_ROOT);
+    }
+
+    return reply.type('text/html; charset=utf-8').sendFile('index.html', SITE_ROOT, {
+      maxAge: 0,
+      immutable: false,
+    });
+  });
+}
+
+function isReservedPath(pathname: string): boolean {
+  return (
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/v1/') ||
+    pathname.startsWith('/portal/') ||
+    pathname.startsWith('/admin/') ||
+    pathname.startsWith('/docs') ||
+    pathname === '/openapi.json' ||
+    pathname === '/metrics' ||
+    pathname === '/healthz'
+  );
+}
+
+function trimPrefix(urlPath: string, prefix: string): string {
+  const pathname = new URL(urlPath, 'http://localhost').pathname;
+  if (!pathname.startsWith(prefix)) return '';
+  return pathname.slice(prefix.length);
+}
+
+async function fileExists(root: string, relativePath: string): Promise<boolean> {
+  const absolutePath = resolve(root, relativePath);
+  if (!absolutePath.startsWith(root)) return false;
+  try {
+    await access(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
 }

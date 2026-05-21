@@ -13,21 +13,21 @@ This doc is for production.
 ## Topology
 
 A single-host or single-pod deployment of the three load-bearing
-services, with the three SPAs deployed independently:
+services, with the gateway serving the checked-in site, portal, and
+admin SPAs itself:
 
 ```
                 ┌────────────────────────────────────────┐
   internet ──►  │  reverse proxy (Traefik / nginx / LB)  │
-                └────┬───────────┬───────────┬───────────┘
-                     │ api.*     │ site.*    │ metrics.*
-                     │           │ portal.*  │ (basic auth)
-                     │           │ admin.*   │
-                     ▼           ▼           ▼
-                ┌────────┐   ┌────────┐   ┌────────┐
-                │gateway │   │ CDN /  │   │gateway │
-                │  :4000 │   │ static │   │ :4000  │
-                └───┬────┘   └────────┘   └────────┘
-                    │            (web/site, web/portal, web/admin)
+                └────┬───────────────────────┬────────────┘
+                     │ example.com           │ metrics.*
+                     │ (/ , /portal/ ,       │ (basic auth)
+                     │  /admin/ , /v1/*)     │
+                     ▼                       ▼
+                ┌────────┐               ┌────────┐
+                │gateway │               │gateway │
+                │  :4001 │               │ :4001  │
+                └───┬────┘               └────────┘
         ┌───────────┼─────────────┐
         │           │             │
         ▼           ▼             ▼
@@ -50,8 +50,8 @@ volume for their UDS sockets. Daemons read the same EVM chain RPC.
 
 Before `docker compose up`:
 
-- [ ] Domain DNS records pointing at the host (api.\*, site.\*,
-      portal.\*, admin.\*, metrics.\*).
+- [ ] Domain DNS records pointing at the host (`example.com` and a
+      metrics host, or your equivalent).
 - [ ] TLS — Let's Encrypt or your CA of choice.
 - [ ] Postgres data volume backed by durable storage.
 - [ ] An EVM JSON-RPC endpoint (Arbitrum One default).
@@ -157,8 +157,6 @@ One).
 ## Bringing the gateway online
 
 The default compose stack gets you most of the way; the `livepeer`
-profile adds the daemons.
-
 ```bash
 # 1. clone + env
 git clone <repo>
@@ -170,7 +168,7 @@ $EDITOR .env   # fill every required value
 docker compose build gateway
 
 # 3. full stack (db + gateway + resolver + payer)
-docker compose --profile livepeer up -d
+docker compose up -d
 ```
 
 The compose defaults in this repo target `service-registry-daemon`
@@ -188,7 +186,7 @@ done the **real-broker validation** below.
 Validate end-to-end against a real orchestrator:
 
 1. **Sign up a test user** through the real flow:
-   - `curl -X POST https://api.example.com/api/waitlist -d '{"name":"…","email":"you@…"}'`
+   - `curl -X POST https://example.com/api/waitlist -d '{"name":"…","email":"you@…"}'`
    - Receive verification email, click it.
    - As admin (via the admin SPA or curl with `X-Admin-Token`),
      approve the row.
@@ -197,7 +195,7 @@ Validate end-to-end against a real orchestrator:
 2. **Verify `/v1/models` is available and non-empty**:
 
    ```bash
-   curl https://api.example.com/v1/models | jq '.data | length'
+   curl https://example.com/v1/models | jq '.data | length'
    # > 0
    ```
 
@@ -213,7 +211,7 @@ Validate end-to-end against a real orchestrator:
 3. **Pick a model**, hit `/v1/chat/completions` with `stream: false`:
 
    ```bash
-   curl https://api.example.com/v1/chat/completions \
+   curl https://example.com/v1/chat/completions \
      -H "Authorization: Bearer $KEY" \
      -H "Content-Type: application/json" \
      -d '{"model":"qwen3:8b","messages":[{"role":"user","content":"say hi"}]}'
@@ -285,14 +283,9 @@ gateway:
   labels:
     - "traefik.enable=true"
     - "traefik.http.routers.api.entrypoints=websecure"
-    - "traefik.http.routers.api.rule=Host(`api.example.com`)"
+    - "traefik.http.routers.api.rule=Host(`example.com`)"
     - "traefik.http.routers.api.tls.certresolver=letsencrypt"
-    - "traefik.http.services.api.loadbalancer.server.port=4000"
-
-    # OpenAI-host routing (same backend, different hostname for clean SDK base_url)
-    - "traefik.http.routers.openai.rule=Host(`openai.example.com`)"
-    - "traefik.http.routers.openai.service=api@docker"
-    - "traefik.http.routers.openai.tls.certresolver=letsencrypt"
+    - "traefik.http.services.api.loadbalancer.server.port=4001"
 
     # /metrics with basic auth
     - "traefik.http.routers.metrics.rule=Host(`metrics.example.com`)"
@@ -303,12 +296,12 @@ gateway:
 ### nginx
 
 Stock reverse-proxy block, terminate TLS, forward to
-`127.0.0.1:4000`. The only non-obvious bit: **disable proxy buffering
+`127.0.0.1:4001`. The only non-obvious bit: **disable proxy buffering
 for `/v1/chat/completions`** so streaming works.
 
 ```nginx
 location /v1/chat/completions {
-  proxy_pass http://127.0.0.1:4000;
+  proxy_pass http://127.0.0.1:4001;
   proxy_http_version 1.1;
   proxy_set_header Connection "";
   proxy_buffering off;
@@ -320,19 +313,14 @@ location /v1/chat/completions {
 
 ## SPA hosting
 
-The three SPAs in `web/` are static. Three options, easiest to
-hardest:
+The gateway serves the checked-in SPAs directly:
 
-1. **Same host** — serve them with the same reverse proxy that
-   fronts the gateway, pointing at the directory. The dev-server.js
-   scripts also work in production but you don't need their proxy
-   logic if the reverse proxy already handles `/api/*` etc.
-2. **CDN / Cloudflare Pages / Netlify / Vercel** — point each SPA's
-   directory at its own deployment. The SPA hardcodes the gateway
-   API origin via build-time replacement or runtime config (TBD —
-   currently the SPAs assume same-origin + dev-server proxy).
-3. **Object storage + CDN** (S3 + CloudFront, R2 + Cloudflare) —
-   classic static-asset shape.
+- site shell + assets at `/`
+- portal shell at `/portal/`, assets at `/portal/static/*`
+- admin shell at `/admin/`, assets at `/admin/static/*`
+
+The separate `dev-server.js` scripts under `web/` are only for local
+development ergonomics.
 
 **Generic branding reminder**: the marketing site says "OpenAI
 Service." If you want to rebrand, edit
@@ -455,11 +443,11 @@ to map your surface. Treat it like `/metrics`:
 
 ```
 # Traefik example — admin-auth middleware on Swagger UI
-- "traefik.http.routers.docs.rule=Host(`api.example.com`) && PathPrefix(`/docs`)"
+- "traefik.http.routers.docs.rule=Host(`example.com`) && PathPrefix(`/docs`)"
 - "traefik.http.routers.docs.middlewares=docs-auth"
 - "traefik.http.middlewares.docs-auth.basicauth.users=ops:$$apr1$$…"
 
-- "traefik.http.routers.openapi.rule=Host(`api.example.com`) && Path(`/openapi.json`)"
+- "traefik.http.routers.openapi.rule=Host(`example.com`) && Path(`/openapi.json`)"
 - "traefik.http.routers.openapi.middlewares=docs-auth"
 ```
 
@@ -507,10 +495,10 @@ docker compose up -d gateway
 docker compose logs -f gateway
 # Look for:
 #   [migrations] migration NNNN_xxx.sql: applied
-#   Server listening at http://0.0.0.0:4000
+#   Server listening at http://0.0.0.0:4001
 
 # 4. Confirm /health is 200:
-curl -sf http://localhost:4000/health | jq .
+curl -sf http://localhost:4001/health | jq .
 
 # 5. Smoke a /v1/* call as in "Real-broker validation" §3.
 ```

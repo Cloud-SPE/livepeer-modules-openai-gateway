@@ -35,13 +35,13 @@ const DEFAULT_PROTO_ROOT = firstExistingPath([
 
 const ConfigSchema = z.object({
   // ── HTTP server ───────────────────────────────────────────────────
-  port: z.coerce.number().int().positive().default(4000),
+  port: z.coerce.number().int().positive().default(4001),
   host: z.string().default('0.0.0.0'),
-  baseUrl: z.string().url().default('http://localhost:4000'),
+  baseUrl: z.string().url().default('http://localhost:4001'),
   /** Public URL where the site SPA is hosted. Used for verification + API-key emails. */
-  publicSiteUrl: z.string().url().default('http://localhost:3000'),
+  publicSiteUrl: z.string().url().default('http://localhost:4001'),
   /** Public URL where the portal SPA is hosted. Linked from the API-key delivery email. */
-  publicPortalUrl: z.string().url().default('http://localhost:3001'),
+  publicPortalUrl: z.string().url().default('http://localhost:4001/portal/'),
   allowedOrigins: z.string().default('*'),
 
   // ── Database ──────────────────────────────────────────────────────

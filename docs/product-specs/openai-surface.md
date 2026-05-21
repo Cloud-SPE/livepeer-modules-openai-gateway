@@ -25,7 +25,7 @@ A drop-in subset of the OpenAI v1 HTTP API:
 
 - Base URL: whatever the gateway is deployed at, plus `/v1`. Example:
   ```python
-  client = OpenAI(api_key="sk-…", base_url="https://api.example.com/v1")
+  client = OpenAI(api_key="sk-…", base_url="https://example.com/v1")
   ```
 - Auth header: `Authorization: Bearer sk-…`
 - All responses are OpenAI-shape JSON unless the spec endpoint says

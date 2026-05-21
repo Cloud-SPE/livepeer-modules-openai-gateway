@@ -67,7 +67,7 @@ SPAs at runtime instead of at PR review time.
 **Surface**: `web/{portal,admin}/lib/api.gen.ts` (new),
 `web/{portal,admin}/lib/api.js` (replace),
 `web/{portal,admin}/components/*.js` (consume typed methods).
-**Fix shape**: `openapi-typescript http://localhost:4000/openapi.json --output …` at build time
+**Fix shape**: `openapi-typescript http://localhost:4001/openapi.json --output …` at build time
 + wrap with a `fetch` helper. SPAs are zero-build so we either
 ship the generated `.ts` as `.js` (run tsc once at "build") or
 emit JS directly via `openapi-fetch`.

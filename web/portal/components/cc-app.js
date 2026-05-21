@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api } from '/lib/api.js';
+import { api } from '/portal/static/lib/api.js';
 
 import './cc-login.js';
 import './cc-account.js';

@@ -19,6 +19,7 @@ RUN pnpm install --frozen-lockfile --filter @livepeer-modules-openai/gateway...
 
 # Build the gateway.
 COPY gateway/ gateway/
+COPY web/ web/
 RUN pnpm --filter @livepeer-modules-openai/gateway build
 
 # ── runtime ───────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ FROM node:24-bookworm-slim AS runtime
 
 # Reasonable defaults; everything else comes from env at deploy time.
 ENV NODE_ENV=production \
-    PORT=4000
+    PORT=4001
 
 WORKDIR /app
 
@@ -36,13 +37,14 @@ COPY --from=builder /app/gateway/node_modules ./gateway/node_modules
 COPY --from=builder /app/gateway/dist ./gateway/dist
 COPY --from=builder /app/gateway/migrations ./gateway/migrations
 COPY --from=builder /app/gateway/package.json ./gateway/package.json
+COPY --from=builder /app/web ./web
 
 # Protos are loaded at runtime; ship them.
 COPY proto/ ./proto/
 
 WORKDIR /app/gateway
 
-EXPOSE 4000
+EXPOSE 4001
 
 # Run as the same non-root uid/gid the daemon images use so the gateway can
 # open their shared Unix sockets.

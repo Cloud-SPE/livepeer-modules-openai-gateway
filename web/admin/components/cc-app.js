@@ -1,5 +1,5 @@
 import { LitElement, html } from 'lit';
-import { api, getToken, setToken } from '/lib/api.js';
+import { api, getToken, setToken } from '/admin/static/lib/api.js';
 
 import './cc-token-prompt.js';
 import './cc-network-health.js';

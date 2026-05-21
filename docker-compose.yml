@@ -1,19 +1,17 @@
 # OpenAI Service — root compose.
 #
 # Default `docker compose up` brings up:
-#   - db        (postgres:16-alpine)
-#   - gateway   (build from ./gateway/Dockerfile)
-#
-# The two Livepeer daemons live behind the `livepeer` profile. The
-# gateway boots fine without them (`/v1/*` returns 503 until they're
-# reachable). Bring them up with:
-#   docker compose --profile livepeer up -d
+#   - db                      (postgres:16-alpine)
+#   - service-registry-daemon
+#   - payer-daemon
+#   - gateway                 (build from ./gateway/Dockerfile)
 #
 # Capability workers are external to this repository and compose stack.
 # Gateway expects on-chain capability providers by default.
 #
-# The three Lit SPAs run independently via `node dev-server.js` in each
-# web/ subdir; they're not in this stack.
+# The gateway image now serves the checked-in SPAs in production. The
+# three Lit SPAs still run independently via `node dev-server.js` in
+# each web/ subdir for local development.
 
 services:
   db:
@@ -31,9 +29,6 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-    ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
-
   gateway:
     build:
       context: .
@@ -43,13 +38,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      service-registry-daemon:
+        condition: service_started
+      payer-daemon:
+        condition: service_started
     environment:
       # ── server ──
-      PORT: "4000"
+      PORT: "4001"
       HOST: "0.0.0.0"
-      BASE_URL: ${BASE_URL:-http://localhost:4000}
-      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:3000}
-      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://localhost:3001}
+      BASE_URL: ${BASE_URL:-http://localhost:4001}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:4001}
+      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://localhost:4001/portal/}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
@@ -78,13 +77,12 @@ services:
     volumes:
       - livepeer-run:/var/run/livepeer
     ports:
-      - "${GATEWAY_HOST_PORT:-4000}:4000"
+      - "${GATEWAY_HOST_PORT:-4001}:4001"
     restart: unless-stopped
 
   service-registry-daemon:
     image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.0}
     container_name: openai-service-resolver
-    profiles: [livepeer]
     restart: unless-stopped
     environment:
       CHAIN_RPC: ${CHAIN_RPC:-}
@@ -115,7 +113,6 @@ services:
   payer-daemon:
     image: tztcloud/livepeer-payment-daemon:${LIVEPEER_PAYER_DAEMON_TAG:-v1.3.0}
     container_name: openai-service-payer
-    profiles: [livepeer]
     restart: unless-stopped
     environment:
       CHAIN_RPC: ${CHAIN_RPC:-}

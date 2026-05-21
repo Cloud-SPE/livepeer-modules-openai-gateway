@@ -1,4 +1,5 @@
-// Portal dev server — serves static files, proxies portal + api paths.
+// Portal dev server — serves the portal shell + namespaced static assets,
+// proxies portal API + /v1/* to the gateway.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -8,7 +9,8 @@ import { request as httpRequest } from 'node:http';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3001);
-const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4000';
+const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4001';
+const PORTAL_STATIC_PREFIX = '/portal/static/';
 const PROXY_PREFIXES = ['/api/', '/portal/', '/v1/'];
 
 const MIME = {
@@ -22,6 +24,8 @@ const MIME = {
 };
 
 function shouldProxy(p) {
+  if (p === '/portal' || p === '/portal/') return false;
+  if (p.startsWith(PORTAL_STATIC_PREFIX)) return false;
   return PROXY_PREFIXES.some((pre) => p.startsWith(pre));
 }
 
@@ -49,7 +53,13 @@ function proxyToGateway(req, res) {
 
 async function serveStatic(req, res) {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-  let filePath = resolve(__dirname, '.' + path);
+  const localPath =
+    path === '/portal' || path === '/portal/'
+      ? '/index.html'
+      : path.startsWith(PORTAL_STATIC_PREFIX)
+      ? `/${path.slice(PORTAL_STATIC_PREFIX.length)}`
+      : path;
+  let filePath = resolve(__dirname, '.' + localPath);
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403);
     res.end('forbidden');
@@ -77,5 +87,5 @@ createServer((req, res) => {
   return serveStatic(req, res);
 }).listen(PORT, () => {
   // eslint-disable-next-line no-console
-  console.log(`portal: http://localhost:${PORT} (proxying /api/* /portal/* /v1/* → ${GATEWAY})`);
+  console.log(`portal: http://localhost:${PORT} (serving /portal/ + /portal/static/*, proxying API to ${GATEWAY})`);
 });

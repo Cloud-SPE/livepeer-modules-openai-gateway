@@ -21,9 +21,9 @@ flowchart LR
   portalUser[Approved user] -->|HTTP + cookie| PORTAL
   admin[Operator] -->|HTTP + X-Admin-Token| ADMIN
 
-  SITE[web/site<br/>Lit zero-build] -->|/api/*| GW
-  PORTAL[web/portal<br/>Lit zero-build] -->|/api/*, /portal/*| GW
-  ADMIN[web/admin<br/>Lit zero-build] -->|/api/*, /admin/*| GW
+  SITE[web/site<br/>Lit zero-build] -->|served by gateway| GW
+  PORTAL[web/portal<br/>Lit zero-build] -->|served by gateway at /portal/| GW
+  ADMIN[web/admin<br/>Lit zero-build] -->|served by gateway at /admin/| GW
 
   GW[gateway<br/>TS / Fastify] -->|SQL| DB[(Postgres)]
   GW -->|gRPC UDS| REG[service-registry-daemon]
@@ -387,26 +387,19 @@ flowchart TB
   REG <-->|UDS| UDS
   PAYER <-->|UDS| UDS
 
-  CDN[CDN / static host]
-  cdn_site[web/site] --> CDN
-  cdn_portal[web/portal] --> CDN
-  cdn_admin[web/admin] --> CDN
-
   proxy[Reverse proxy<br/>Traefik / nginx / Cloud LB] -->|host: api.*| GW
-  proxy -->|host: example.com| CDN
-  proxy -->|host: portal.*| CDN
-  proxy -->|host: admin.*| CDN
+  proxy -->|host: example.com| GW
   proxy -->|host: metrics.*<br/>+ basic auth| GW
 
   classDef ours fill:#1f3a2a,stroke:#4cd97b,color:#e8eaed;
   classDef ext fill:#1a1c20,stroke:#9aa0a6,color:#9aa0a6,stroke-dasharray: 4 2;
-  class GW,DB,UDS,cdn_site,cdn_portal,cdn_admin ours;
-  class REG,PAYER,CDN,proxy ext;
+  class GW,DB,UDS ours;
+  class REG,PAYER,proxy ext;
 ```
 
 In dev, the same shape collapses: `docker compose up -d` runs gateway
-+ db; each SPA runs via its own `dev-server.js` with a path-prefix
-proxy to the gateway.
++ db; each SPA runs via its own `dev-server.js`, serving its checked-in
+files locally and proxying API traffic back to the gateway.
 
 ---
 

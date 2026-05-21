@@ -1,4 +1,5 @@
-// Admin dev server — proxies /admin/* and /api/* to the gateway.
+// Admin dev server — serves the admin shell + namespaced static assets,
+// proxies admin API traffic to the gateway.
 
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
@@ -8,7 +9,8 @@ import { request as httpRequest } from 'node:http';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3002);
-const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4000';
+const GATEWAY = process.env.GATEWAY_URL ?? 'http://localhost:4001';
+const ADMIN_STATIC_PREFIX = '/admin/static/';
 const PROXY_PREFIXES = ['/api/', '/admin/'];
 
 const MIME = {
@@ -22,6 +24,8 @@ const MIME = {
 };
 
 function shouldProxy(p) {
+  if (p === '/admin' || p === '/admin/') return false;
+  if (p.startsWith(ADMIN_STATIC_PREFIX)) return false;
   return PROXY_PREFIXES.some((pre) => p.startsWith(pre));
 }
 
@@ -49,7 +53,13 @@ function proxyToGateway(req, res) {
 
 async function serveStatic(req, res) {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-  let filePath = resolve(__dirname, '.' + path);
+  const localPath =
+    path === '/admin' || path === '/admin/'
+      ? '/index.html'
+      : path.startsWith(ADMIN_STATIC_PREFIX)
+      ? `/${path.slice(ADMIN_STATIC_PREFIX.length)}`
+      : path;
+  let filePath = resolve(__dirname, '.' + localPath);
   if (!filePath.startsWith(__dirname)) {
     res.writeHead(403);
     res.end('forbidden');
@@ -77,5 +87,5 @@ createServer((req, res) => {
   return serveStatic(req, res);
 }).listen(PORT, () => {
   // eslint-disable-next-line no-console
-  console.log(`admin: http://localhost:${PORT} (proxying /api/* /admin/* → ${GATEWAY})`);
+  console.log(`admin: http://localhost:${PORT} (serving /admin/ + /admin/static/*, proxying API to ${GATEWAY})`);
 });

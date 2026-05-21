@@ -10,7 +10,11 @@ zero-build: no Vite, no esbuild, no bundler. Dependencies load via
 
 Why: agents can edit and reload without a build step. The runtime is the
 source. A small `dev-server.js` per SPA serves static files and proxies
-`/api/*` and `/v1/*` to the gateway.
+`/api/*` and `/v1/*` to the gateway. In shipped gateway builds, Fastify
+serves the checked-in SPA files itself:
+- site shell + assets at `/`
+- portal shell at `/portal/`, assets at `/portal/static/*`
+- admin shell at `/admin/`, assets at `/admin/static/*`
 
 ## DOM invariants
 
