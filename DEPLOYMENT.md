@@ -78,6 +78,7 @@ non-negotiable secrets in production:
 | `IP_HASH_PEPPER` | Same, for IPs / verification / session tokens. | `openssl rand -hex 32` |
 | `METRICS_TOKEN` | Bearer token to fetch `/metrics`. Optional; deployer's choice between this and front-edge basic auth. | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Email delivery. Optional but strongly recommended. | from your Resend dashboard |
+| `RESEND_BASE_URL` | Override the Resend email API endpoint. Optional. | `https://api.resend.com/emails` |
 
 **Pepper rotation**: changing `API_KEY_HASH_PEPPER` invalidates every
 existing API key. Rotating peppers is currently a planned outage —

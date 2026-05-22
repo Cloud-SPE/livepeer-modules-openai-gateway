@@ -56,6 +56,7 @@ const ConfigSchema = z.object({
 
   // ── Email (Phase 4) ──────────────────────────────────────────────
   resendApiKey: z.string().optional(),
+  resendBaseUrl: z.string().url().optional(),
   fromEmail: z.string().default('OpenAI Service <noreply@example.com>'),
 
   // ── Livepeer / proxy core ────────────────────────────────────────
@@ -101,6 +102,7 @@ export function loadConfig(): Config {
     metricsToken: process.env['METRICS_TOKEN'],
     sessionTtlHours: process.env['SESSION_TTL_HOURS'],
     resendApiKey: process.env['RESEND_API_KEY'],
+    resendBaseUrl: process.env['RESEND_BASE_URL'],
     fromEmail: process.env['FROM_EMAIL'],
     resolverSocket: process.env['LIVEPEER_RESOLVER_SOCKET'],
     payerDaemonSocket: process.env['LIVEPEER_PAYER_DAEMON_SOCKET'],

@@ -302,6 +302,7 @@ The main groups are:
 ### Email
 
 - `RESEND_API_KEY`
+- `RESEND_BASE_URL`
 - `FROM_EMAIL`
 
 ### Livepeer daemon and chain configuration

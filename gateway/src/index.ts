@@ -68,6 +68,7 @@ async function main(): Promise<void> {
   // ── email ────────────────────────────────────────────────────────
   const email = createEmailClient({
     apiKey: config.resendApiKey,
+    baseUrl: config.resendBaseUrl,
     fromEmail: config.fromEmail,
     log: console,
   });

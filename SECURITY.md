@@ -103,6 +103,7 @@ rate-limiting; that's a separate plan.
 
 - `METRICS_TOKEN` — Bearer-token gate on `/metrics`
 - `RESEND_API_KEY` — email delivery (unset → log instead of send)
+- `RESEND_BASE_URL` — override for the Resend email API endpoint
 - `LIVEPEER_RESOLVER_SOCKET` — registry-driven routing
 - `LIVEPEER_PAYER_DAEMON_SOCKET` — required for `/v1/*` to function
   (unset → /v1/* returns 500)
