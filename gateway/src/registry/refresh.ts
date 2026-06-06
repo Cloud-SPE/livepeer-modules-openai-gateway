@@ -1,9 +1,14 @@
-// Background task that pulls the current service-registry snapshot via
-// the dedicated registry catalog reader and upserts it into the `models` table.
+// Background task that pulls the current capability snapshot from the
+// LOC clearinghouse (via the registry catalog reader) and upserts it
+// into the `models` table.
 //
-// `/v1/models` reads from `models`. The proxy path (`routeSelector.select`)
-// still queries the registry on demand per request — this refresh task
-// exists so the catalog endpoint isn't blocked on a gRPC call.
+// `/v1/models` reads from `models`. The proxy path opens LOC jobs on
+// demand per request — this refresh task exists so the catalog endpoint
+// isn't blocked on an HTTP call to the LOC.
+//
+// Note: LOC's capability listing carries no display metadata
+// (name/description/provider/category), so those columns are only ever
+// populated by operator overrides — preserved by the coalesce upsert.
 
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';

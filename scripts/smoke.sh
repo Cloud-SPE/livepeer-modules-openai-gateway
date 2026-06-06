@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for `make smoke`.
 #
-# Assumes `make dev` already brought up the full on-chain-backed compose
-# stack (gateway + db + resolver + payer). Exercises the public + portal
-# + admin + /v1/* surfaces against the real daemon wiring.
+# Assumes `make dev` already brought up the compose stack (gateway + db)
+# with LOC_BASE_URL/LOC_API_KEY pointing at a live LOC clearinghouse.
+# Exercises the public + portal + admin + /v1/* surfaces.
 
 set -euo pipefail
 

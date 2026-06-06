@@ -28,7 +28,7 @@ routing.
   - `POST /admin/waitlist/:id/resend-verification`
   - `GET /admin/users`, `GET /admin/users/:id`
   - `GET /admin/usage`
-  - `GET /admin/registry/{model-health,summary,candidates,health,models}`
+  - `GET /admin/registry/{model-health,summary,candidates,loc,models}`
 
 ## Why
 
@@ -61,15 +61,10 @@ running. Polish optional; correctness mandatory.
    plus per-model interaction modes and offerings.
 3. `#/registry` is the deeper diagnostic view.
 4. Live candidate table shows what `registryCatalog.inspect()` sees
-   right now from the resolver.
-   Each row includes quote-aware route identity:
-   `units_per_price`, `quote_id`, `quote_version`,
-   `constraint_fingerprint`, `route_fingerprint`.
-5. Route health panel shows attempts / successes / failures /
-   cooldowns plus per-route snapshots.
-6. Cached models table shows what `/v1/models` will return next, plus
-   the stored quote-aware metadata carried over from the inspection
-   snapshot.
+   right now from the LOC capability catalog (one row per offering id).
+5. LOC panel (`/admin/registry/loc`) shows LOC health, the operator's
+   credit balance, and the pending-settle backlog.
+6. Cached models table shows what `/v1/models` will return next.
 7. Registry summary shows live-vs-cache model drift and whether the
    `/v1/models` cache is fresh or stale.
 ```
@@ -89,14 +84,14 @@ running. Polish optional; correctness mandatory.
   response; later admin surfaces show only the safe prefix.
 - Reject is reversible by editing the row in the DB; v1 doesn't ship
   an unreject button.
-- Registry candidate endpoint reflects the resolver's current live
-  snapshot at request time.
+- Registry candidate endpoint reflects the LOC capability catalog's
+  current live snapshot at request time.
 - Registry summary reports whether the cached `/v1/models` table is
   fresh enough to serve publicly, using the same snapshot-age rule as
   the public catalog endpoint.
 - Admin health and registry screens include inline help affordances for
   ambiguous terms such as `live only`, `cached only`, `offerings`,
-  interaction modes, and route-health state.
+  interaction modes, and LOC credit balance / settle backlog.
 
 ## Edge cases
 

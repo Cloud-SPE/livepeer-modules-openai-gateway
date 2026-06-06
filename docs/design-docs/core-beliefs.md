@@ -39,17 +39,20 @@ plan.
 If an OpenAI SDK call works against `api.openai.com` and fails against
 us, that's a bug. We don't "improve" the OpenAI API shape.
 
-## 6. The gateway pays the network
+## 6. The gateway pays the network via the LOC
 
-Even with no customer billing, every `/v1/*` request mints a
-`Livepeer-Payment` envelope via `payment-daemon`. The network charges us;
-we don't charge users yet. Removing payment is removing the product.
+Even with no customer billing, every `/v1/*` request opens a job on the
+LOC (Livepeer Open Clearinghouse), which selects the route and mints the
+`Livepeer-Payment` envelope, charging the operator's credit balance the
+estimate. The gateway settles actual usage afterwards and holds no chain
+keys. The network charges us; we don't charge users yet. Removing payment
+is removing the product.
 
 ## 7. Models reflect reality
 
-`/v1/models` is whatever the on-chain registry advertises right now. No
-hardcoded list. No curated catalog. If a model disappears from the
-registry, it disappears from the API within one refresh cycle.
+`/v1/models` is whatever the LOC capability catalog advertises right now.
+No hardcoded list. No curated catalog. If a model disappears from the
+catalog, it disappears from the API within one refresh cycle.
 
 ## 8. Zero-build frontend, light DOM only
 
@@ -96,4 +99,4 @@ exec plan justifies them.
 Capability worker implementations live outside this repository. The
 gateway should never `import` workload-serving code; the only contract
 between the gateway and execution side is the Livepeer capability
-surface exposed through brokers and the network daemons.
+surface exposed through brokers (selected by the LOC clearinghouse).

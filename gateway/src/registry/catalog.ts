@@ -1,12 +1,21 @@
-import * as grpc from '@grpc/grpc-js';
-import * as protoLoader from '@grpc/proto-loader';
+// Registry catalog, LOC-backed: snapshots the clearinghouse's
+// GET /v1/capabilities into the RouteCandidate shape the models
+// refresh, admin surfaces, and per-request model resolution consume.
+//
+// With the LOC exposing the registry's merged `extra` metadata per
+// offering, model identity is dynamic again: the user-facing model id
+// is extra.openai.model (also the runner-facing serving name), falling
+// back to the offering id when the metadata is absent. Interaction
+// mode comes from extra.interaction_mode.
+//
+// inspect() memoizes for a short TTL — route handlers resolve
+// model→offering on every request, and the snapshot only changes as
+// fast as orchestrator manifests do.
 
-import type { Config } from '../config.js';
+import type { LocCapability, LocClient } from '../loc/client.js';
 
-const RESOLVER_PROTO_FILES = [
-  'livepeer/registry/v1/types.proto',
-  'livepeer/registry/v1/resolver.proto',
-];
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface RouteCandidate {
   brokerUrl: string;
@@ -31,164 +40,64 @@ export interface RegistryCatalog {
   close?(): Promise<void>;
 }
 
-interface ResolverClient extends grpc.Client {
-  listKnown(
-    req: Record<string, never>,
-    cb: (err: grpc.ServiceError | null, resp: ListKnownResult) => void,
-  ): void;
-  resolveByAddress(
-    req: ResolveByAddressRequest,
-    cb: (err: grpc.ServiceError | null, resp: ResolveResult) => void,
-  ): void;
-}
+const INSPECT_TTL_MS = 15_000;
 
-interface ResolverProto {
-  livepeer: { registry: { v1: { Resolver: grpc.ServiceClientConstructor } } };
-}
-
-interface ListKnownResult {
-  entries: KnownEntry[];
-}
-
-interface KnownEntry {
-  ethAddress: string;
-}
-
-interface ResolveByAddressRequest {
-  ethAddress: string;
-  allowUnsigned: boolean;
-  forceRefresh: boolean;
-}
-
-interface ResolveResult {
-  nodes: ResolverNode[];
-}
-
-interface ResolverNode {
-  url: string;
-  operatorAddress: string;
-  enabled: boolean;
-  extraJson?: Buffer | Uint8Array | string;
-  capabilities: ResolverCapability[];
-}
-
-interface ResolverCapability {
-  name: string;
-  workUnit: string;
-  extraJson?: Buffer | Uint8Array | string;
-  offerings: ResolverOffering[];
-}
-
-interface ResolverOffering {
-  id: string;
-  pricePerWorkUnitWei: string;
-  constraintsJson?: Buffer | Uint8Array | string;
-}
-
-type JsonPrimitive = string | number | boolean | null;
-type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-
-export function createRegistryCatalog(cfg: Config): RegistryCatalog {
-  const client = newResolverClient(cfg.resolverSocket, cfg.resolverProtoRoot);
+export function createRegistryCatalog(loc: LocClient): RegistryCatalog {
+  let cached: { at: number; candidates: RouteCandidate[] } | null = null;
 
   return {
     async inspect(): Promise<RouteCandidate[]> {
-      return loadSnapshot(client);
-    },
-    async close(): Promise<void> {
-      client.close();
+      if (cached && Date.now() - cached.at < INSPECT_TTL_MS) {
+        return cached.candidates;
+      }
+      const capabilities = await loc.listCapabilities();
+      const candidates = flattenCapabilities(capabilities);
+      cached = { at: Date.now(), candidates };
+      return candidates;
     },
   };
 }
 
-function newResolverClient(socketPath: string, protoRoot: string): ResolverClient {
-  const def = protoLoader.loadSync(RESOLVER_PROTO_FILES, {
-    keepCase: false,
-    longs: String,
-    enums: String,
-    defaults: true,
-    oneofs: true,
-    includeDirs: [protoRoot],
-  });
-  const proto = grpc.loadPackageDefinition(def) as unknown as ResolverProto;
-  const ClientCtor = proto.livepeer.registry.v1.Resolver;
-  return new ClientCtor(
-    `unix:${socketPath}`,
-    grpc.credentials.createInsecure(),
-  ) as unknown as ResolverClient;
-}
-
-async function loadSnapshot(
-  client: ResolverClient,
-): Promise<RouteCandidate[]> {
-  const known = await new Promise<KnownEntry[]>((resolve, reject) => {
-    client.listKnown({}, (err, resp) => (err ? reject(err) : resolve(resp.entries ?? [])));
-  });
-
-  const resolved = await Promise.allSettled(
-    known.map(
-      (entry) =>
-        new Promise<ResolveResult>((resolve, reject) => {
-          client.resolveByAddress(
-            {
-              ethAddress: entry.ethAddress,
-              allowUnsigned: false,
-              forceRefresh: false,
-            },
-            (err, resp) => (err ? reject(err) : resolve(resp)),
-          );
-        }),
-    ),
-  );
-
-  return collectResolvedResults(resolved).flatMap(flattenResolveResult);
-}
-
-export function collectResolvedResults(
-  results: PromiseSettledResult<ResolveResult>[],
-): ResolveResult[] {
-  return results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
-}
-
-export function flattenResolveResult(resolved: ResolveResult): RouteCandidate[] {
+/** Pure transform: LOC capabilities → RouteCandidate[]. Exported for
+ * unit tests. */
+export function flattenCapabilities(capabilities: LocCapability[]): RouteCandidate[] {
   const out: RouteCandidate[] = [];
-  for (const node of resolved.nodes ?? []) {
-    if (!node.enabled || !node.url) continue;
-    const nodeExtra = parseOpaqueJson(node.extraJson);
-    for (const capability of node.capabilities ?? []) {
-      const mergedExtra = mergeJsonObjects(nodeExtra, parseOpaqueJson(capability.extraJson));
-      const model = inferModel(capability.name, mergedExtra);
-      for (const offering of capability.offerings ?? []) {
-        out.push({
-          brokerUrl: node.url,
-          capability: stripCapabilityModelSuffix(capability.name),
-          offering: offering.id,
-          model,
-          interactionMode: inferInteractionMode(mergedExtra),
-          ethAddress: node.operatorAddress,
-          pricePerWorkUnitWei: offering.pricePerWorkUnitWei ?? '0',
-          workUnit: capability.workUnit ?? '',
-          unitsPerPrice: 1,
-          quoteId: '',
-          quoteVersion: 0,
-          constraintFingerprint: emptyConstraintFingerprint(),
-          routeFingerprint: new Uint8Array(),
-          extra: mergedExtra,
-          constraints: parseOpaqueJson(offering.constraintsJson),
-        });
-      }
+  for (const capability of capabilities) {
+    if (!capability.name) continue;
+    for (const offering of capability.offerings) {
+      if (!offering.id) continue;
+      const extra = normalizeExtra(offering.extra);
+      out.push({
+        brokerUrl: '',
+        capability: capability.name,
+        offering: offering.id,
+        model: inferModel(extra) ?? offering.id,
+        interactionMode: inferInteractionMode(extra),
+        ethAddress: '',
+        pricePerWorkUnitWei: offering.pricePerWorkUnitWei ?? '0',
+        workUnit: offering.workUnit ?? capability.workUnit ?? '',
+        unitsPerPrice: 1,
+        quoteId: '',
+        quoteVersion: 0,
+        constraintFingerprint: new Uint8Array(),
+        routeFingerprint: new Uint8Array(),
+        extra,
+        constraints: null,
+      });
     }
   }
   return out;
 }
 
-export function inferModel(capabilityName: string, extra: JsonValue | null): string | null {
-  if (isJsonObject(extra) && isJsonObject(extra.openai)) {
-    const model = extra.openai['model'];
-    if (typeof model === 'string' && model.trim().length > 0) return model.trim();
-  }
-  const suffix = capabilityModelSuffix(capabilityName);
-  return suffix || null;
+/** The runner-facing serving name advertised by the orchestrator —
+ * extra.openai.model. Null when the metadata is absent (pre-extra LOC
+ * or non-OpenAI capability). */
+export function inferModel(extra: JsonValue | null): string | null {
+  if (!isJsonObject(extra)) return null;
+  const openai = extra['openai'];
+  if (!isJsonObject(openai)) return null;
+  const model = openai['model'];
+  return typeof model === 'string' && model.trim().length > 0 ? model.trim() : null;
 }
 
 export function inferInteractionMode(extra: JsonValue | null): string | null {
@@ -197,45 +106,10 @@ export function inferInteractionMode(extra: JsonValue | null): string | null {
   return typeof mode === 'string' && mode.trim().length > 0 ? mode.trim() : null;
 }
 
-function stripCapabilityModelSuffix(capabilityName: string): string {
-  const suffix = capabilityModelSuffix(capabilityName);
-  if (!suffix) return capabilityName;
-  return capabilityName.slice(0, -(suffix.length + 1));
+function normalizeExtra(raw: Record<string, unknown>): JsonValue | null {
+  return Object.keys(raw).length > 0 ? (raw as JsonValue) : null;
 }
 
-function capabilityModelSuffix(capabilityName: string): string {
-  for (const prefix of [
-    'openai:chat-completions:',
-    'openai:embeddings:',
-    'openai:audio-transcriptions:',
-    'openai:audio-speech:',
-    'openai:images-generations:',
-    'openai:realtime:',
-  ]) {
-    if (capabilityName.startsWith(prefix)) {
-      return capabilityName.slice(prefix.length).trim();
-    }
-  }
-  return '';
-}
-
-function parseOpaqueJson(raw: Buffer | Uint8Array | string | undefined): JsonValue | null {
-  if (!raw) return null;
-  const text = typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8');
-  if (!text) return null;
-  return JSON.parse(text) as JsonValue;
-}
-
-function mergeJsonObjects(a: JsonValue | null, b: JsonValue | null): JsonValue | null {
-  if (!isJsonObject(a)) return b;
-  if (!isJsonObject(b)) return a;
-  return { ...a, ...b };
-}
-
-function isJsonObject(value: JsonValue | null): value is { [key: string]: JsonValue } {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function emptyConstraintFingerprint(): Uint8Array {
-  return new Uint8Array();
+function isJsonObject(value: JsonValue | null | undefined): value is { [key: string]: JsonValue } {
+  return value !== null && value !== undefined && typeof value === 'object' && !Array.isArray(value);
 }

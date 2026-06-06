@@ -6,14 +6,17 @@
 //
 // Required subsystems:
 //   - Postgres (always)
-//   - payer-daemon
-//   - service-registry-daemon
+//   - LOC clearinghouse (route selection + payment minting)
+//
+// `pendingSettlements` is informational: a growing backlog means the
+// settler can't reach LOC (refunds are delayed, not lost), but it does
+// not flip the gateway to down on its own.
 
-import { existsSync, statSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 
 import type { ServerDeps } from '../server.js';
+import * as usageRepo from '../repo/usageReservations.js';
 
 type CheckStatus = 'ok' | 'error';
 
@@ -27,12 +30,13 @@ interface HealthBody {
   status: 'ok' | 'down';
   checks: {
     db: Check;
-    payer: Check;
-    registry: Check;
+    loc: Check;
   };
+  pendingSettlements: number | null;
 }
 
 const DB_PING_TIMEOUT_MS = 1500;
+const LOC_PING_TIMEOUT_MS = 3000;
 
 async function checkDb(deps: ServerDeps): Promise<Check> {
   const started = Date.now();
@@ -49,24 +53,15 @@ async function checkDb(deps: ServerDeps): Promise<Check> {
   }
 }
 
-function checkSocket(path: string): Check {
+async function checkLoc(deps: ServerDeps): Promise<Check> {
   const started = Date.now();
   try {
-    if (!existsSync(path)) {
-      return {
-        status: 'error',
-        latencyMs: Date.now() - started,
-        error: `socket not present: ${path}`,
-      };
-    }
-    const st = statSync(path);
-    if (!st.isSocket()) {
-      return {
-        status: 'error',
-        latencyMs: Date.now() - started,
-        error: `path is not a socket: ${path}`,
-      };
-    }
+    await Promise.race([
+      deps.loc.health(),
+      new Promise((_, rej) =>
+        setTimeout(() => rej(new Error('loc ping timeout')), LOC_PING_TIMEOUT_MS),
+      ),
+    ]);
     return { status: 'ok', latencyMs: Date.now() - started };
   } catch (err) {
     return { status: 'error', latencyMs: Date.now() - started, error: msg(err) };
@@ -79,21 +74,22 @@ function msg(err: unknown): string {
 
 function rollUp(checks: HealthBody['checks']): HealthBody['status'] {
   if (checks.db.status === 'error') return 'down';
-  if (checks.payer.status === 'error' || checks.registry.status === 'error') return 'down';
+  if (checks.loc.status === 'error') return 'down';
   return 'ok';
 }
 
 export async function registerHealthRoutes(app: FastifyInstance): Promise<void> {
   const handler = async (): Promise<{ code: number; body: HealthBody }> => {
     const deps = app.deps;
-    const [db, payer, registry] = await Promise.all([
+    const [db, loc, pendingSettlements] = await Promise.all([
       checkDb(deps),
-      Promise.resolve(checkSocket(deps.config.payerDaemonSocket)),
-      Promise.resolve(checkSocket(deps.config.resolverSocket)),
+      checkLoc(deps),
+      usageRepo.pendingSettleCount(deps.db).catch(() => null),
     ]);
     const body: HealthBody = {
-      status: rollUp({ db, payer, registry }),
-      checks: { db, payer, registry },
+      status: rollUp({ db, loc }),
+      checks: { db, loc },
+      pendingSettlements,
     };
     return { code: body.status === 'down' ? 503 : 200, body };
   };

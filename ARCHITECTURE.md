@@ -26,19 +26,17 @@ flowchart LR
   ADMIN[web/admin<br/>Lit zero-build] -->|served by gateway at /admin/| GW
 
   GW[gateway<br/>TS / Fastify] -->|SQL| DB[(Postgres)]
-  GW -->|gRPC UDS| REG[service-registry-daemon]
-  GW -->|gRPC UDS| PAYER[payment-daemon]
+  GW -->|HTTPS + X-API-Key<br/>jobs + settle| LOC[LOC clearinghouse<br/>route selection + PM tickets]
   GW -->|Livepeer-* headers<br/>+ Livepeer-Payment| BROKER[capability-broker<br/>on orchestrator host]
   BROKER --> WORKER[capability worker<br/>chat / embeddings / audio / tts / images / rerank]
   GW -->|optional| RESEND[Resend<br/>email]
 
-  REG -.->|reads| CHAIN[(EVM chain<br/>AI service registry)]
-  PAYER -.->|reads| CHAIN
+  LOC -.->|selects routes,<br/>signs tickets| CHAIN[(EVM chain<br/>AI service registry)]
 
   classDef ours fill:#1f3a2a,stroke:#4cd97b,color:#e8eaed;
   classDef ext fill:#1a1c20,stroke:#9aa0a6,color:#9aa0a6,stroke-dasharray: 4 2;
   class GW,SITE,PORTAL,ADMIN,DB ours;
-  class REG,PAYER,BROKER,WORKER,RESEND,CHAIN ext;
+  class LOC,BROKER,WORKER,RESEND,CHAIN ext;
 ```
 
 Green = in this repo. Dashed gray = external runtime peers (run as
@@ -53,13 +51,16 @@ their own containers / on other hosts).
 | **Gateway** | `gateway/` | Translates OpenAI requests → Livepeer wire. Hosts the SaaS shell (waitlist, sessions, API keys, admin). | The only stateful service in this repo (besides Postgres). |
 | **Marketing site** | `web/site/` | Public landing + waitlist signup + email-verification page. | Generic copy; rebrand at deploy time. |
 | **Portal** | `web/portal/` | Authenticated user dashboard: account, API keys, usage. | Cookie-session UX. |
-| **Admin** | `web/admin/` | Operator console: waitlist queue, users, usage, registry debug. | `X-Admin-Token` UX (stored in localStorage). |
-| **Protos** | `proto/` | Vendored gRPC definitions for `payment-daemon` + `service-registry-daemon`. | Loaded at runtime by the gateway. |
+| **Admin** | `web/admin/` | Operator console: waitlist queue, users, usage, LOC + catalog debug. | `X-Admin-Token` UX (stored in localStorage). |
 
-The two Livepeer daemons (`service-registry-daemon`,
-`payment-daemon`) are pulled as official Docker images
-(`tztcloud/livepeer-*-daemon`) and run alongside the gateway in the
-`livepeer` compose profile. They are **not** in this repository.
+Route selection and payment minting are delegated to the **LOC —
+Livepeer Open Clearinghouse**, an external HTTP service
+(`https://loc.cloudspe.com` by default) reached with an `X-API-Key`
+header. The gateway opens a job per `/v1/*` request and settles actual
+usage afterwards. The LOC owns chain access and the pooled wallet that
+signs payment (PM) tickets; this repo holds no keys and never talks to
+the chain. The LOC is **not** in this repository and is not part of the
+compose stack.
 
 ---
 
@@ -71,16 +72,16 @@ The two Livepeer daemons (`service-registry-daemon`,
             ├────────────────────────────────────────────┤
             │ routes/{public,portal,admin}/  proxy/      │  ← HTTP surface
             ├────────────────────────────────────────────┤
-            │ proxy/service/  proxy/livepeer/  email/    │  ← service / wire
+            │ loc/  proxy/livepeer/  email/              │  ← service / wire
             ├────────────────────────────────────────────┤
-            │ repo/  schema/  registry/                  │  ← data / RPC
+            │ repo/  schema/  registry/                  │  ← data / catalog
             ├────────────────────────────────────────────┤
             │ config.ts  db.ts  crypto.ts  metrics.ts    │  ← primitives
             └────────────────────────────────────────────┘
 ```
 
 Edges go *down* only. Cross-cutting concerns (config, db pool,
-email client, route selector, rate limiter) are bundled into
+email client, LOC client, rate limiter) are bundled into
 `ServerDeps` in `index.ts` and threaded to every handler via
 `app.decorate('deps', deps)` on the Fastify instance. Handlers read
 them via `app.deps`. Enforcement is `tsc` + reviewer attention; a
@@ -90,8 +91,8 @@ mechanical import-graph linter is on the tech-debt tracker.
 
 | Subtree | Origin | Notes |
 |---|---|---|
-| `proxy/livepeer/`, `proxy/service/` | Copied verbatim from upstream `livepeer-network-modules/openai-gateway/` | Load-bearing wire mechanics — streaming usage parsing, payment minting, failover. Don't churn. |
-| `proxy/service/genericRouteHealth.ts` | Inlined upstream `gateway-route-health` package | The TS class + Prometheus renderer. |
+| `proxy/livepeer/` | Copied verbatim from upstream `livepeer-network-modules/openai-gateway/` | Load-bearing wire mechanics — streaming usage parsing, broker dispatch over the http-reqresp/http-stream/http-multipart modules. Don't churn. |
+| `loc/` (`client.ts`, `dispatch.ts`, `settler.ts`) | Hand-written in this repo | Typed HTTP client for the LOC, the per-request job open → dispatch → settle flow, and the durable background settler. Replaced the deleted `proxy/service/` route selector + `proxy/livepeer/payment.ts`. |
 | `proxy/{chat,embeddings,audio-speech,audio-transcriptions,images}.ts` | Adapted from upstream | Stripped of `customer-portal` + `chatBilling`/`nonChatBilling`; rewired to local `apiKeys` + `usage_reservations`. |
 | `proxy/rerank.ts` | Ported from an earlier Rust implementation of the same surface | TS reimplementation. |
 | Everything else (`routes/`, `repo/`, `schema/`, `crypto.ts`, `email/`, `metrics.ts`, `db.ts`, `config.ts`, `server.ts`, `index.ts`) | Hand-written in this repo | Built directly for this repository. |
@@ -105,7 +106,7 @@ erDiagram
   WAITLIST ||--o{ API_KEYS : "owns"
   API_KEYS ||--o{ USER_SESSIONS : "issues"
   API_KEYS ||--o{ USAGE_RESERVATIONS : "logs"
-  MODELS }o..o{ MODELS_CACHE_REFRESH : "(no FK)<br/>refreshed from registry"
+  MODELS }o..o{ MODELS_CACHE_REFRESH : "(no FK)<br/>refreshed from LOC catalog"
 
   WAITLIST {
     uuid id PK
@@ -156,6 +157,10 @@ erDiagram
     integer latency_ms
     integer status_code
     text error_text
+    text loc_job_id
+    text settle_state "pending|settled|failed (nullable)"
+    bigint settle_actual_units
+    text settle_outcome
     timestamptz created_at
     timestamptz resolved_at
   }
@@ -180,24 +185,31 @@ erDiagram
 
 **One Postgres database. One migration track.** `gateway/migrations/`
 holds numbered `.sql` files applied in order at boot by a
-home-grown runner (`gateway/src/db.ts`). The current shape is the
-single migration `0001_initial.sql`.
+home-grown runner (`gateway/src/db.ts`). The current shape is
+`0001_initial.sql` through `0004_loc_settlement.sql` (the last adds the
+`loc_job_id` / `settle_state` / `settle_actual_units` / `settle_outcome`
+columns that drive the durable settler).
 
 ### Why the state machine on `usage_reservations`
 
-v1 has no billing math, so `open → committed | refunded` is purely
-observational. The schema is intentionally forward-compatible: when
-billing lands, the same rows + state machine can carry money math
-without a schema change.
+v1 has no customer billing math, so `open → committed | refunded` is
+purely observational. The same DB write that commits or refunds a
+reservation also enqueues a durable **settle intent**
+(`settle_state='pending'` + `settle_actual_units`), which the background
+settler drains by calling the LOC. The schema is intentionally
+forward-compatible: when customer billing lands, the same rows + state
+machine can carry money math without a schema change.
 
 ### Why a `models` cache table
 
-`/v1/models` must be cheap. Querying the gRPC resolver on every call
-would couple catalog reads to chain availability + add 100ms+ to
-every `models` request. The background refresh task (every
-`REGISTRY_REFRESH_INTERVAL_MS`, default 60s) writes the latest
-snapshot into `models`; the HTTP handler reads from there. Stale rows
-get `active=false` so disappearance is reflected within one refresh.
+`/v1/models` must be cheap. Calling the LOC catalog on every request
+would couple catalog reads to LOC availability + add latency to every
+`models` request. The background refresh task (every
+`REGISTRY_REFRESH_INTERVAL_MS`, default 60s) reads the LOC
+`GET /v1/capabilities`, flattens it, and writes the latest snapshot into
+`models`; the HTTP handler reads from there. Stale rows get
+`active=false` so disappearance is reflected within one refresh. Display
+metadata is operator-override only; the model id is the LOC offering id.
 
 ---
 
@@ -241,54 +253,61 @@ sequenceDiagram
   participant C as OpenAI SDK client
   participant GW as gateway
   participant DB as postgres
-  participant PAY as payment-daemon
-  participant REG as service-registry-daemon
+  participant LOC as LOC clearinghouse
   participant BRK as capability-broker
   participant RNR as runner
+  participant SET as settler (background)
 
   C->>GW: POST /v1/chat/completions<br/>Authorization: Bearer sk-…
   GW->>DB: SELECT api_keys WHERE key_hash=…
   Note over GW,DB: 401 if missing/revoked/unapproved
   GW->>DB: INSERT usage_reservations (state='open', work_id)
-  GW->>REG: gRPC: select candidates by capability+offering
-  REG-->>GW: ranked candidates
-  GW->>PAY: gRPC: CreatePayment(face_value, recipient, capability)
-  PAY-->>GW: payment_bytes
-  GW->>BRK: POST /v1/cap<br/>Livepeer-Capability, Livepeer-Payment, …
+  GW->>LOC: POST /v1/jobs {capability, offering, estimated_units}
+  Note over LOC: selects a route AND mints the payment<br/>envelope; charges the estimate to the<br/>operator's credit balance
+  LOC-->>GW: {job_id, broker_url, mode, payment_envelope, …}
+  GW->>BRK: POST broker_url<br/>Livepeer-Capability, Livepeer-Payment, …
   BRK->>RNR: forward request
   RNR-->>BRK: response (SSE stream or unary)
   BRK-->>GW: response
 
   alt success
-    GW->>DB: UPDATE usage_reservations<br/>state='committed', committed_work_units=…
+    GW->>DB: UPDATE usage_reservations<br/>state='committed', committed_work_units=…,<br/>loc_job_id, settle_state='pending'
     GW-->>C: response (200, SSE or JSON)
   else upstream failure
-    Note over GW: failover loop:<br/>retry next candidate
-    GW->>DB: UPDATE usage_reservations<br/>state='refunded', error_text=…
+    GW->>DB: UPDATE usage_reservations<br/>state='refunded', error_text=…,<br/>settle_state='pending' (0 units)
     GW-->>C: OpenAI-shaped error<br/>(502/500)
+  end
+
+  Note over GW,LOC: on LOC mode mismatch the gateway settles 0<br/>(outcome 'mode_mismatch') and re-opens a job<br/>(LOC_JOB_RETRIES retries)
+
+  loop every LOC_SETTLE_INTERVAL_MS
+    SET->>DB: SELECT pending settle intents
+    SET->>LOC: POST /v1/jobs/{id}/settle {actual_units, outcome}
+    LOC-->>SET: refunds the unused part of the estimate
+    SET->>DB: settle_state='settled' (409/404 are terminal successes)
   end
 ```
 
-### 5.3 Registry refresh
+### 5.3 Catalog refresh
 
 ```mermaid
 sequenceDiagram
   participant T as gateway boot
   participant TIMER as setInterval (60s)
-  participant RS as RouteSelector<br/>(in-process)
-  participant REG as service-registry-daemon
+  participant CAT as registryCatalog<br/>(LOC-backed)
+  participant LOC as LOC clearinghouse
   participant DB as postgres
 
   T->>TIMER: startRegistryRefresh()
   loop every REGISTRY_REFRESH_INTERVAL_MS
-    TIMER->>RS: inspect()
-    RS->>REG: ListKnown → ResolveByAddress(per addr)
-    REG-->>RS: nodes + capabilities + offerings
-    RS-->>TIMER: RouteCandidate[]
-    TIMER->>DB: BEGIN<br/>UPSERT models (one row per modelId)<br/>UPDATE active=false where modelId NOT IN (…)<br/>COMMIT
+    TIMER->>CAT: inspect()
+    CAT->>LOC: GET /v1/capabilities
+    LOC-->>CAT: capabilities + offerings
+    CAT-->>TIMER: RouteCandidate[]
+    TIMER->>DB: BEGIN<br/>UPSERT models (one row per offering id)<br/>UPDATE active=false where modelId NOT IN (…)<br/>COMMIT
   end
 
-  Note over DB: /v1/models reads this table — never queries the registry directly.
+  Note over DB: /v1/models reads this table — never queries the LOC directly.
 ```
 
 ### 5.4 Portal cookie auth
@@ -322,12 +341,11 @@ sequenceDiagram
 |---|---|
 | OpenAI SDK clients | HTTPS → `/v1/*` |
 | Portal / admin / site users | HTTPS → static SPAs + JSON APIs |
-| `service-registry-daemon` | gRPC over UDS (`/var/run/livepeer/service-registry.sock`) |
-| `payment-daemon` | gRPC over UDS (`/var/run/livepeer/payer-daemon.sock`) |
-| `capability-broker` (on orch host) | HTTPS, per the Livepeer wire spec |
+| LOC clearinghouse | HTTPS + `X-API-Key` (`LOC_BASE_URL`); jobs + settle + capabilities |
+| `capability-broker` (on orch host) | HTTPS, per the Livepeer wire spec (broker URL comes from the LOC job) |
 | Postgres | TCP, single DB for all SaaS data |
 | Resend | HTTPS, email delivery (optional in dev) |
-| EVM chain (Arbitrum One by default) | Indirectly — only via the two daemons |
+| EVM chain (Arbitrum One by default) | Indirectly — only via the LOC, which owns chain access and the PM-ticket wallet |
 
 ---
 
@@ -360,9 +378,8 @@ sequenceDiagram
   - HTTP: `openai_service_http_requests_total{method,route,status}`,
     `openai_service_http_request_duration_seconds`
   - Proxy: `openai_service_proxy_reservations_total{capability,outcome}`
+  - Settler: `openai_service_proxy_settle_total{outcome}`
   - Waitlist: `openai_service_waitlist_signups_total`
-  - Route health (from `gateway-route-health` renderer):
-    `livepeer_gateway_route_health_*`
 - **Structured JSON logs** to stdout via Fastify's pino logger.
   Request IDs propagated as `Livepeer-Request-Id` on `/v1/*`.
 - **`usage_reservations`** is the durable per-request log (queryable
@@ -377,15 +394,10 @@ flowchart TB
   subgraph host[Single host or k8s pod]
     GW[gateway]
     DB[(postgres)]
-    REG[service-registry-daemon]
-    PAYER[payment-daemon]
-    UDS[(livepeer-run<br/>volume<br/>UDS sockets)]
   end
 
   GW <-->|TCP| DB
-  GW <-->|UDS| UDS
-  REG <-->|UDS| UDS
-  PAYER <-->|UDS| UDS
+  GW <-->|HTTPS + X-API-Key| LOC[LOC clearinghouse<br/>external]
 
   proxy[Reverse proxy<br/>Traefik / nginx / Cloud LB] -->|host: api.*| GW
   proxy -->|host: example.com| GW
@@ -393,13 +405,14 @@ flowchart TB
 
   classDef ours fill:#1f3a2a,stroke:#4cd97b,color:#e8eaed;
   classDef ext fill:#1a1c20,stroke:#9aa0a6,color:#9aa0a6,stroke-dasharray: 4 2;
-  class GW,DB,UDS ours;
-  class REG,PAYER,proxy ext;
+  class GW,DB ours;
+  class LOC,proxy ext;
 ```
 
-In dev, the same shape collapses: `docker compose up -d` runs gateway
-+ db; each SPA runs via its own `dev-server.js`, serving its checked-in
-files locally and proxying API traffic back to the gateway.
+The compose stack is just `db` + `gateway` — no daemon sidecars, no
+unix-socket volumes. In dev, the same shape holds: `docker compose up -d`
+runs gateway + db; each SPA runs via its own `dev-server.js`, serving its
+checked-in files locally and proxying API traffic back to the gateway.
 
 ---
 
@@ -411,6 +424,9 @@ files locally and proxying API traffic back to the gateway.
 - Production deployment infra (Grafana, Prometheus, Traefik configs)
   — deferred; will land under `infra/` later (tracked in
   `docs/exec-plans/tech-debt-tracker.md` when prioritized).
-- Real upstream proxying validation — needs a real
-  `capability-broker` + `payment-daemon`. Everything up to and
-  including the broker call is unit-tested via the smoke flow.
+- The LOC clearinghouse itself — route selection, the pooled
+  PM-ticket wallet, and chain access are owned by the LOC, not this
+  repo. `make loc-smoke` exercises a real job open + settle against it.
+- Real upstream proxying validation — needs a real `capability-broker`.
+  Everything up to and including the broker call is unit-tested via the
+  smoke flow.

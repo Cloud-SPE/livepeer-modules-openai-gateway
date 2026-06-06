@@ -1,15 +1,21 @@
 # Payment flow
 
-How the gateway mints `Livepeer-Payment` envelopes for every `/v1/*`
-request, where the keys live, and what the failure modes look like.
+How the gateway pays the Livepeer network for every `/v1/*` request via
+the **LOC — Livepeer Open Clearinghouse**: the job lifecycle, where the
+keys live (they don't — the LOC holds them), and the failure modes.
 
 ## Why payment exists in v1
 
-Even though v1 has **no customer billing**, the gateway still has to
-pay the Livepeer network on behalf of each request. Network
-orchestrators won't serve traffic without a valid payment envelope;
-removing payment removes the product. See
-[core-beliefs §6](./core-beliefs.md).
+Even though v1 has **no customer billing**, the gateway still has to pay
+the Livepeer network on behalf of each request. Network orchestrators
+won't serve traffic without a valid payment envelope; removing payment
+removes the product. See [core-beliefs §6](./core-beliefs.md).
+
+What changed: the gateway no longer mints tickets itself. It holds no
+keystore and never talks to the chain. Route selection AND payment
+minting are delegated to the LOC, reached over HTTPS with an `X-API-Key`
+header. The gateway operator holds a LOC account with a wei-denominated
+**credit balance**; the LOC's pooled wallet signs PM tickets.
 
 ## Wire shape
 
@@ -19,108 +25,120 @@ Every outbound request from gateway → broker carries:
 Livepeer-Capability: openai:chat-completions
 Livepeer-Offering:   qwen3:8b
 Livepeer-Mode:       http-reqresp@v0  (or http-stream / http-multipart)
-Livepeer-Payment:    <base64-encoded payment bytes>
+Livepeer-Payment:    <opaque payment_envelope from the LOC>
 Livepeer-Request-Id: <uuid>
 ```
 
-The `Livepeer-Payment` value is opaque to the gateway. It's bytes
-minted by `payment-daemon` over a unix-socket gRPC call using the
-selected route's accepted price basis plus a gateway-side funding
-intent.
+The `Livepeer-Payment` value is opaque to the gateway — it's the
+`payment_envelope` the LOC returned when the job was opened. The broker
+URL is also LOC-supplied (the `broker_url` field of the job).
 
-## gRPC surface
+## Job lifecycle
 
-The payer-daemon exposes (from `proto/livepeer/payments/v1/payer_daemon.proto`):
+### 1. Open a job
 
-```protobuf
-service PayerDaemon {
-  rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
-  rpc Health(google.protobuf.Empty) returns (HealthResponse);
-}
+Per outbound attempt the gateway calls the LOC:
 
-message CreatePaymentRequest {
-  bytes         recipient              = 1;  // 20-byte eth address
-  string        ticket_params_base_url = 2;  // selected broker URL
-  AcceptedPrice accepted_price         = 3;
-  FundingIntent funding                = 4;
-}
+```
+POST /v1/jobs
+{ "capability": "...", "offering": "...", "estimated_units": <n> }
+→ { job_id, work_id, broker_url, mode, payment_envelope,
+    expected_value_wei, settle_endpoint, ... }
 ```
 
-`gateway/src/proxy/livepeer/payment.ts` is the only call site. It:
+The LOC does **route selection and payment minting in one call**, and
+**charges the operator's credit balance the expected value of the full
+estimate at issuance** (charge-at-issuance). `estimated_units` comes from
+the per-endpoint request handler's heuristic.
 
-1. Loads the proto files at boot (`init()`) from
-   `config.paymentProtoRoot` (default `/app/proto` in container,
-   `<repo>/proto` in dev).
-2. Opens a single long-lived gRPC client to
-   `unix:${config.payerDaemonSocket}` (default
-   `/var/run/livepeer/payer-daemon.sock`).
-3. Sends a Health probe; init throws if it fails. The boot sequence
-   logs a warning and continues — `/v1/*` will 503 at request time
-   instead of crashing the process.
-4. `buildPayment()` does a one-shot `CreatePayment` RPC per outbound
-   broker attempt, returns the base64-encoded `paymentBytes` for the
-   header.
+### 2. Forward to the broker
 
-`accepted_price` carries the exact selected route tuple:
-- `price_per_unit_wei`
-- `units_per_price`
-- `work_unit_name`
-- `capability`
-- `offering`
-- `quote_ref { quote_id, quote_version, constraint_fingerprint, route_fingerprint }`
+The gateway forwards the request to `broker_url` with `payment_envelope`
+in the `Livepeer-Payment` header. The http-reqresp / http-stream /
+http-multipart wire modules in `proxy/livepeer/` are unchanged.
 
-`funding` is the gateway's initial budget authorization for the
-attempt. In the current implementation it is conservative and
-single-shot:
-- `estimated_units` comes from the request handler's heuristic
-- `funded_value_wei` is derived from `estimated_units × accepted price`
-- `max_total_units = estimated_units`
-- `top_up_allowed = false`
+### 3. Settle actual usage
 
-## Per-attempt, not per-request
+After the response — success or failure — the same DB write that commits
+or refunds the reservation enqueues a durable **settle intent**:
+`usage_reservations.loc_job_id`, `settle_state='pending'`,
+`settle_actual_units`. A background settler then calls:
 
-`routeDispatch.attemptCandidates()` may retry against a fresh broker
-candidate on upstream failure. Each retry mints a **new** payment
-envelope — the contract is "one payment per attempted upstream call,"
-not "one payment per inbound `/v1/*` request." This is
-intentional: a different broker serving the retry needs its own
-ticket scoped to it. The reservation row is updated with the actual
-selected route metadata for the last attempted candidate, so commit and
-refund records still retain route/quote context.
+```
+POST /v1/jobs/{id}/settle
+{ "actual_units": <n>, "outcome": "..." }
+```
+
+which **refunds the unused part of the estimate**. The settler runs every
+`LOC_SETTLE_INTERVAL_MS` (default 15s), up to `LOC_SETTLE_MAX_ATTEMPTS`
+(default 20). `409 job_already_settled` and `404 job_not_found` are
+**terminal successes** (idempotent — the job is already accounted for).
+
+- **Failed broker attempts settle with 0 units** → full refund.
+- **Mode mismatch**: if the LOC returns a job whose `mode` doesn't match
+  what the route needs, the gateway settles 0 with outcome
+  `mode_mismatch` and opens a fresh job (`LOC_JOB_RETRIES`, also covering
+  429/5xx). See [route-selector.md](./route-selector.md).
+
+## Charge-at-issuance + durable async settlement
+
+The estimate is charged up front; settlement only ever **refunds** the
+unused part. This is deliberate:
+
+- The refund is not on the request critical path. A transient LOC blip
+  must not block the user's response or strand money.
+- A missed settle means **over-paying the estimate** — bounded by the
+  durable settler retrying until it lands. It never charges the user and
+  never loses money beyond the (refundable) estimate.
 
 ## What we DO NOT do
 
-- **No ticket-signing in the gateway.** The daemon owns the
-  keystore + nonce state. v0.2 of the wire spec explicitly hoists
-  signing out of the gateway so warm-key handling stays one surface.
-- **No payment caching.** Tickets are nonce-bound; reuse breaks
-  receivers.
-- **No payment validation.** The orchestrator-side
-  `capability-broker` validates envelopes; the gateway treats them
-  as opaque.
+- **No ticket-signing in the gateway.** The LOC owns the keystore +
+  ticket lifecycle. The gateway holds no keys and never touches the
+  chain.
+- **No `INVALID_RECIPIENT_RAND` retry loop.** The daemon-era payment
+  retry on recipient-rand changes is gone — the LOC owns the ticket
+  lifecycle end to end.
+- **No payment caching / reuse.** Each job mints its own envelope.
+- **No payment validation.** The orchestrator-side `capability-broker`
+  validates envelopes; the gateway treats them as opaque.
 
 ## Failure modes
 
 | What fails | What the gateway does | Visible to user as |
 |---|---|---|
-| Payer daemon socket not present at boot | Warn, continue. Cache stays `null`. | First `/v1/*` call → `500 internal_error: "payer-daemon client not initialized"`. |
-| Payer daemon socket present but Health RPC fails | Warn, continue. | Same as above. |
-| `CreatePayment` RPC fails mid-request | Throws — caught by route handler. Reservation `refund`. Failover loop tries the next candidate (a new payment is minted for it). | `502 api_error` if every candidate's `CreatePayment` fails. |
-| Broker rejects the envelope as invalid | Route-health tracker marks the candidate unhealthy; retry next. | If all candidates reject: passthrough of the last broker's error. |
+| LOC unreachable / `LOC_API_KEY` invalid | `POST /v1/jobs` throws `LocApiError`. Reservation opened then refunded. | `/v1/*` returns `503`. `/health` flips `loc: error` → `down`. |
+| LOC credit balance insufficient | Job open fails. Reservation refunded (settles 0). | `/v1/*` error; balance visible at `GET /admin/registry/loc`. |
+| LOC returns a `mode` the route can't use | Settle 0 (`mode_mismatch`), re-open a fresh job (`LOC_JOB_RETRIES`). | If retries exhaust: surfaced error. |
+| Broker rejects / 5xx / network error | Settle the job with 0 units (full refund); propagate the broker error. | `502` passthrough of the broker error. |
+| Settler can't reach the LOC | Settle intent stays `pending`; retried up to `LOC_SETTLE_MAX_ATTEMPTS`. No user impact — refund delayed, not lost. | none directly; `pendingSettlements` in `/health` rises. |
 
 ## Operator setup
 
-See [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) §"Livepeer plumbing"
-for the keystore + chain-RPC setup. Short version: payer-daemon needs
-a funded eth keystore (`keystore.json` + `keystore-password` file
-mounted at `/etc/livepeer/`) and an EVM JSON-RPC endpoint.
+See [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) §"LOC clearinghouse" for
+config. Short version: set `LOC_BASE_URL` + `LOC_API_KEY` and keep the
+account's credit balance funded. There is no keystore or chain RPC to
+provision. `make loc-smoke` opens a 1-unit job and settles 0 against the
+live LOC.
 
 ## Where it lives
 
 | Concern | File |
 |---|---|
-| gRPC client + RPC call | `gateway/src/proxy/livepeer/payment.ts` |
-| Proto files | `proto/livepeer/payments/v1/*.proto` |
-| Boot wiring | `gateway/src/index.ts` (the `payer-daemon` block) |
-| Config | `gateway/src/config.ts` — `payerDaemonSocket`, `paymentProtoRoot` |
-| Health probe | `gateway/src/routes/health.ts` (socket presence only — we don't reissue the gRPC Health probe per request) |
+| Typed LOC HTTP client (`openJob`, `settleJob`, `getBalance`, `health`) + `LocApiError` | `gateway/src/loc/client.ts` |
+| Per-request open → dispatch → settle flow | `gateway/src/loc/dispatch.ts` |
+| Durable background settler | `gateway/src/loc/settler.ts` |
+| Settle columns | `gateway/migrations/0004_loc_settlement.sql` |
+| Boot wiring | `gateway/src/index.ts` |
+| Config | `gateway/src/config.ts` — `LOC_BASE_URL`, `LOC_API_KEY`, `LOC_TIMEOUT_MS`, `LOC_SETTLE_INTERVAL_MS`, `LOC_SETTLE_MAX_ATTEMPTS`, `LOC_JOB_RETRIES` |
+| Health probe | `gateway/src/routes/health.ts` (LOC `health()` ping + `pendingSettlements`) |
+
+## History
+
+This replaces the daemon-era payment flow, where the gateway minted
+`Livepeer-Payment` envelopes itself via a `payment-daemon` over a
+unix-socket gRPC call (`CreatePayment`) using a funded local keystore.
+That design — including its proto surface and the
+`INVALID_RECIPIENT_RAND` retry loop — is described in the completed exec
+plans under [`../exec-plans/completed/`](../exec-plans/completed/)
+(see `0005-onchain-only-runtime.md`).

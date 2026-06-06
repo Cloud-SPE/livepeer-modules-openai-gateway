@@ -6,7 +6,8 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp } from './service/routeDispatch.js';
+import { dispatchReqresp, jobRefFromError } from '../loc/dispatch.js';
+import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
@@ -36,8 +37,8 @@ export async function registerEmbeddingsRoute(
       const capability = Capability.Embeddings;
       const requestId = readOrSynthRequestId(req);
 
-      const offering = typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
-      if (!offering) {
+      const requestedModel = typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
+      if (!requestedModel) {
         return reply
           .code(400)
           .header(HEADER.REQUEST_ID, requestId)
@@ -49,19 +50,28 @@ export async function registerEmbeddingsRoute(
       const handle = await openReservation(deps, {
         apiKeyId: auth.apiKeyId,
         capability,
-        model: offering,
+        model: requestedModel,
         estimatedWorkUnits: estimateEmbeddingUnits(body.input),
       });
+
+      const { offering, runnerModel } = await resolveRoute({
+        catalog: deps.registryCatalog,
+        modelMap: deps.config.locModelMap,
+        capability,
+        requestedModel,
+      });
+      const upstreamBody =
+        runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
         const estimatedUnits = estimateEmbeddingUnits(body.input);
         const dispatched = await dispatchReqresp({
-          routeSelector: deps.routeSelector,
-          request: req,
+          loc: deps.loc,
           capability,
           offering,
           estimatedUnits,
-          body: JSON.stringify(body),
+          maxJobAttempts: deps.config.locJobRetries + 1,
+          body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
           requestId,
         });
@@ -70,6 +80,7 @@ export async function registerEmbeddingsRoute(
         await commitReservation(deps, handle, {
           workUnits: usage,
           statusCode: dispatched.result.status,
+          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -77,11 +88,12 @@ export async function registerEmbeddingsRoute(
           .header(HEADER.REQUEST_ID, requestId)
           .send(Buffer.from(dispatched.result.body));
       } catch (err) {
-        const candidate = (err as { routeCandidate?: import('./service/routeSelector.js').RouteCandidate }).routeCandidate;
+        const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
         await refundReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
+          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
@@ -90,7 +102,10 @@ export async function registerEmbeddingsRoute(
 }
 
 function parseUsage(body: BodyInit | null): number | null {
-  if (typeof body !== 'string' && !(body instanceof Uint8Array)) return null;
+  // http-reqresp returns the broker body as an ArrayBuffer.
+  if (typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer)) {
+    return null;
+  }
   try {
     const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
     const parsed = JSON.parse(text) as { usage?: { total_tokens?: number } };

@@ -9,7 +9,8 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchMultipart } from './service/routeDispatch.js';
+import { dispatchMultipart, jobRefFromError } from '../loc/dispatch.js';
+import { resolveRoute } from '../loc/resolve.js';
 import { extractMultipartField } from './service/multipart.js';
 import { handleBrokerError } from './errors.js';
 import {
@@ -61,10 +62,10 @@ export async function registerAudioTranscriptionsRoute(
       const capability = Capability.AudioTranscriptions;
       const modelField = extractMultipartField(body, contentType, 'model');
       const modelHeader = req.headers['livepeer-model'] as string | undefined;
-      const offering =
+      const requestedModel =
         modelField ??
         (modelHeader && modelHeader.length > 0 ? modelHeader : null);
-      if (!offering) {
+      if (!requestedModel) {
         return reply
           .code(400)
           .header(HEADER.REQUEST_ID, requestId)
@@ -76,17 +77,27 @@ export async function registerAudioTranscriptionsRoute(
       const handle = await openReservation(deps, {
         apiKeyId: auth.apiKeyId,
         capability,
-        model: offering,
+        model: requestedModel,
         estimatedWorkUnits: 1,
+      });
+
+      // Resolve a friendly model id to its offering for the LOC job.
+      // The multipart body is forwarded verbatim (no model rewrite) —
+      // transcription runners are addressed by offering id today.
+      const { offering } = await resolveRoute({
+        catalog: deps.registryCatalog,
+        modelMap: deps.config.locModelMap,
+        capability,
+        requestedModel,
       });
 
       try {
         const dispatched = await dispatchMultipart({
-          routeSelector: deps.routeSelector,
-          request: req,
+          loc: deps.loc,
           capability,
           offering,
           estimatedUnits: 1,
+          maxJobAttempts: deps.config.locJobRetries + 1,
           body,
           contentType,
           requestId,
@@ -95,6 +106,7 @@ export async function registerAudioTranscriptionsRoute(
         await commitReservation(deps, handle, {
           workUnits: 1,
           statusCode: dispatched.result.status,
+          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -105,11 +117,12 @@ export async function registerAudioTranscriptionsRoute(
           .header(HEADER.REQUEST_ID, requestId)
           .send(Buffer.from(dispatched.result.body));
       } catch (err) {
-        const candidate = (err as { routeCandidate?: import('./service/routeSelector.js').RouteCandidate }).routeCandidate;
+        const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
         await refundReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
+          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }

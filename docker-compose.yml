@@ -1,15 +1,16 @@
 # OpenAI Service — root compose.
 #
 # Default `docker compose up` brings up:
-#   - db                      (postgres:16-alpine)
-#   - service-registry-daemon
-#   - payer-daemon
-#   - gateway                 (build from ./gateway/Dockerfile)
+#   - db        (postgres:16-alpine)
+#   - gateway   (build from ./gateway/Dockerfile)
+#
+# Route selection + payment minting are delegated to the LOC
+# (Livepeer Open Clearinghouse) over HTTPS — no daemon sidecars or
+# unix-socket volumes. Set LOC_BASE_URL + LOC_API_KEY in .env.
 #
 # Capability workers are external to this repository and compose stack.
-# Gateway expects on-chain capability providers by default.
 #
-# The gateway image now serves the checked-in SPAs in production. The
+# The gateway image serves the checked-in SPAs in production. The
 # three Lit SPAs still run independently via `node dev-server.js` in
 # each web/ subdir for local development.
 
@@ -38,10 +39,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      service-registry-daemon:
-        condition: service_started
-      payer-daemon:
-        condition: service_started
     environment:
       # ── server ──
       PORT: "4001"
@@ -67,71 +64,22 @@ services:
       RESEND_BASE_URL: ${RESEND_BASE_URL:-https://api.resend.com/emails}
       FROM_EMAIL: ${FROM_EMAIL:-OpenAI Service <noreply@example.com>}
 
-      # ── Livepeer plumbing ──
-      LIVEPEER_PAYER_DAEMON_SOCKET: /var/run/livepeer/payer-daemon.sock
-      LIVEPEER_RESOLVER_SOCKET: ${LIVEPEER_RESOLVER_SOCKET:-/var/run/livepeer/service-registry.sock}
+      # ── LOC clearinghouse ──
+      LOC_BASE_URL: ${LOC_BASE_URL:-https://loc.cloudspe.com}
+      LOC_API_KEY: ${LOC_API_KEY:-}
+      LOC_TIMEOUT_MS: ${LOC_TIMEOUT_MS:-30000}
+      LOC_SETTLE_INTERVAL_MS: ${LOC_SETTLE_INTERVAL_MS:-15000}
+      LOC_SETTLE_MAX_ATTEMPTS: ${LOC_SETTLE_MAX_ATTEMPTS:-20}
+      LOC_JOB_RETRIES: ${LOC_JOB_RETRIES:-2}
+      LOC_MODEL_MAP: ${LOC_MODEL_MAP:-{}}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
 
       # ── /v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
-    volumes:
-      - livepeer-run:/var/run/livepeer
     ports:
       - "${GATEWAY_HOST_PORT:-4001}:4001"
     restart: unless-stopped
 
-  service-registry-daemon:
-    image: tztcloud/livepeer-service-registry-daemon:${LIVEPEER_REGISTRY_DAEMON_TAG:-v1.3.0}
-    container_name: openai-service-resolver
-    restart: unless-stopped
-    environment:
-      CHAIN_RPC: ${CHAIN_RPC:-}
-      CHAIN_ID: ${CHAIN_ID:-42161}
-      LIVEPEER_RESOLVER_SOCKET: /var/run/livepeer/service-registry.sock
-    command:
-      - --mode=resolver
-      - --socket=/var/run/livepeer/service-registry.sock
-      - --store-path=/var/lib/livepeer/registry-cache.db
-      - --chain-rpc=${CHAIN_RPC:-}
-      - --chain-id=${CHAIN_ID:-42161}
-      - --controller-address=${CONTROLLER_ADDRESS:-0xD8E8328501E9645d16Cf49539efC04f734606ee4}
-      - --ai-service-registry-address=${AI_SERVICE_REGISTRY_ADDRESS:-}
-      - --discovery=chain
-      - --round-poll-interval=${ROUND_POLL_INTERVAL:-120s}
-      - --cache-manifest-ttl=${CACHE_MANIFEST_TTL:-5m}
-      - --manifest-max-bytes=${MANIFEST_MAX_BYTES:-1048576}
-      - --manifest-fetch-timeout=${MANIFEST_FETCH_TIMEOUT:-5s}
-      - --max-stale=${MAX_STALE:-30m}
-      - --reject-unsigned=true
-      - --log-level=${REGISTRY_LOG_LEVEL:-info}
-      - --log-format=${REGISTRY_LOG_FORMAT:-json}
-      - --metrics-listen=:${REGISTRY_METRICS_PORT:-9095}
-    volumes:
-      - livepeer-run:/var/run/livepeer
-      - openai-service-registry-cache:/var/lib/livepeer
-
-  payer-daemon:
-    image: tztcloud/livepeer-payment-daemon:${LIVEPEER_PAYER_DAEMON_TAG:-v1.3.0}
-    container_name: openai-service-payer
-    restart: unless-stopped
-    environment:
-      CHAIN_RPC: ${CHAIN_RPC:-}
-      CHAIN_ID: ${CHAIN_ID:-42161}
-      LIVEPEER_PAYER_SOCKET: /var/run/livepeer/payer-daemon.sock
-      LIVEPEER_PAYER_KEYSTORE_PATH: /etc/livepeer/keystore.json
-      LIVEPEER_PAYER_KEYSTORE_PASSWORD_FILE: /etc/livepeer/keystore-password
-    command:
-      - --mode=sender
-      - --socket=/var/run/livepeer/payer-daemon.sock
-      - --chain-rpc=${CHAIN_RPC:-}
-      - --keystore-path=/etc/livepeer/keystore.json
-      - --keystore-password-file=/etc/livepeer/keystore-password
-    volumes:
-      - livepeer-run:/var/run/livepeer
-      - ${LIVEPEER_KEYSTORE_DIR:-./.dev/keystore}:/etc/livepeer:ro
-
 volumes:
   openai-service-pgdata:
-  livepeer-run:
-  openai-service-registry-cache:

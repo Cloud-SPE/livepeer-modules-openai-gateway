@@ -15,7 +15,8 @@ import { HEADER } from './livepeer/headers.js';
 import { MODE as REQRESP_MODE } from './livepeer/http-reqresp.js';
 import { MODE as STREAM_MODE } from './livepeer/http-stream.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp, dispatchStream } from './service/routeDispatch.js';
+import { dispatchReqresp, dispatchStream, jobRefFromError } from '../loc/dispatch.js';
+import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
@@ -48,12 +49,11 @@ export async function registerChatRoute(
       const auth = req.proxyAuth!;
       const body = (req.body ?? {}) as ChatCompletionsBody;
       const isStream = body.stream === true;
-      const interactionMode = isStream ? STREAM_MODE : REQRESP_MODE;
       const capability = Capability.ChatCompletions;
       const requestId = readOrSynthRequestId(req);
 
-      const offering = pickModel(body);
-      if (!offering) {
+      const requestedModel = pickModel(body);
+      if (!requestedModel) {
         return reply
           .code(400)
           .header(HEADER.REQUEST_ID, requestId)
@@ -65,11 +65,25 @@ export async function registerChatRoute(
       const handle = await openReservation(deps, {
         apiKeyId: auth.apiKeyId,
         capability,
-        model: offering,
+        model: requestedModel,
         estimatedWorkUnits: estimatedChatWorkUnits(body),
       });
 
-      const dispatchBody = isStream ? withForcedUsageChunk(body) : body;
+      // Users request either the friendly model id (extra.openai.model)
+      // or a raw offering id. Resolve to the offering for the LOC job
+      // and the runner-facing serving name for the upstream body,
+      // preferring an offering whose advertised mode matches stream vs
+      // unary.
+      const { offering, runnerModel } = await resolveRoute({
+        catalog: deps.registryCatalog,
+        modelMap: deps.config.locModelMap,
+        capability,
+        requestedModel,
+        interactionMode: isStream ? STREAM_MODE : REQRESP_MODE,
+      });
+      const upstreamBody =
+        runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
+      const dispatchBody = isStream ? withForcedUsageChunk(upstreamBody) : upstreamBody;
       const bodyStr = JSON.stringify(dispatchBody);
       const estimatedUnits = estimatedChatWorkUnits(body);
 
@@ -78,7 +92,6 @@ export async function registerChatRoute(
           capability,
           offering,
           estimatedUnits,
-          interactionMode,
           bodyStr,
           requestId,
           handle,
@@ -89,30 +102,34 @@ export async function registerChatRoute(
       // ── unary ────────────────────────────────────────────────────
       try {
         const dispatched = await dispatchReqresp({
-          routeSelector: deps.routeSelector,
-          request: req,
+          loc: deps.loc,
           capability,
           offering,
           estimatedUnits,
-          interactionMode,
+          maxJobAttempts: deps.config.locJobRetries + 1,
           body: bodyStr,
           contentType: 'application/json',
           requestId,
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         const usage = parseTotalTokens(dispatched.result.body);
-        await commitReservation(deps, handle, { workUnits: usage, statusCode: dispatched.result.status });
+        await commitReservation(deps, handle, {
+          workUnits: usage,
+          statusCode: dispatched.result.status,
+          locJobId: dispatched.jobRef.jobId,
+        });
         await reply
           .code(dispatched.result.status)
           .header('Content-Type', dispatched.result.headers.get('Content-Type') ?? 'application/json')
           .header(HEADER.REQUEST_ID, requestId)
           .send(Buffer.from(dispatched.result.body));
       } catch (err) {
-        const candidate = (err as { routeCandidate?: import('./service/routeSelector.js').RouteCandidate }).routeCandidate;
+        const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
         await refundReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
+          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
@@ -124,7 +141,6 @@ interface StreamingInput {
   capability: string;
   offering: string;
   estimatedUnits: number;
-  interactionMode: string;
   bodyStr: string;
   requestId: string;
   handle: ReservationHandle;
@@ -139,22 +155,22 @@ async function runStreaming(
   let dispatched;
   try {
     dispatched = await dispatchStream({
-      routeSelector: deps.routeSelector,
-      request: req,
+      loc: deps.loc,
       capability: input.capability,
       offering: input.offering,
       estimatedUnits: input.estimatedUnits,
-      interactionMode: input.interactionMode,
+      maxJobAttempts: deps.config.locJobRetries + 1,
       body: input.bodyStr,
       contentType: 'application/json',
       requestId: input.requestId,
     });
   } catch (err) {
-    const candidate = (err as { routeCandidate?: import('./service/routeSelector.js').RouteCandidate }).routeCandidate;
+    const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
     if (candidate) await recordSelectedRoute(deps, input.handle, candidate);
     await refundReservation(deps, input.handle, {
       statusCode: brokerStatus(err),
       errorText: (err as Error).message ?? 'unknown',
+      locJobId: jobRefFromError(err)?.jobId ?? null,
     });
     handleBrokerError(reply, err, input.requestId);
     return;
@@ -190,15 +206,24 @@ async function runStreaming(
 
   if (streamErr) {
     req.log.warn({ err: streamErr, requestId: input.requestId }, 'chat stream ended with error');
+    // Mid-stream failure: the trailing usage frame never arrived, so
+    // actual units are unknowable. Settle the LOC job with 0 (full
+    // refund of the estimate); LOC's reconciliation janitor verifies
+    // against the daemon ledger out of band.
     await refundReservation(deps, input.handle, {
       statusCode: dispatched.result.status,
       errorText: (streamErr as Error).message ?? 'stream_error',
+      locJobId: dispatched.jobRef.jobId,
     });
     return;
   }
 
   const usage = parseStreamingUsage(Buffer.concat(transcript).toString('utf8'));
-  await commitReservation(deps, input.handle, { workUnits: usage, statusCode: dispatched.result.status });
+  await commitReservation(deps, input.handle, {
+    workUnits: usage,
+    statusCode: dispatched.result.status,
+    locJobId: dispatched.jobRef.jobId,
+  });
 }
 
 // ── helpers (exported for unit tests) ──────────────────────────────
@@ -216,7 +241,10 @@ export function withForcedUsageChunk(body: ChatCompletionsBody): ChatCompletions
 }
 
 export function parseTotalTokens(body: BodyInit | null): number | null {
-  if (typeof body !== 'string' && !(body instanceof Uint8Array)) return null;
+  // http-reqresp returns the broker body as an ArrayBuffer.
+  if (typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer)) {
+    return null;
+  }
   try {
     const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
     const parsed = JSON.parse(text) as { usage?: { total_tokens?: number } };

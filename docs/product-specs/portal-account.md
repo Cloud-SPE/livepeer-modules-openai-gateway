@@ -75,7 +75,7 @@ courtesy, not a product."
   user can understand terms like `selectable`, `cached`, interaction
   modes, and route details without leaving the page.
 - The playground only enables tabs when there is at least one live
-  selectable model for that capability in the current resolver-backed
+  selectable model for that capability in the current LOC-backed
   catalog.
 - The speech playground uses the selected model's published `voices`
   metadata when available and falls back to free-text input when a

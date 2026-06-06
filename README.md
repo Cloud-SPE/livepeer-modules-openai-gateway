@@ -8,12 +8,13 @@ framework.
 This repository is both:
 - a working application
 - a reference implementation / demo of how to build against Livepeer
-  network capabilities using the resolver, payer, and broker contract
-  surfaces from `livepeer-network-modules`
+  network capabilities through the **LOC — Livepeer Open Clearinghouse**
+  HTTP API and the broker wire surface from `livepeer-network-modules`
 
 The core idea is simple: keep the OpenAI client surface familiar, but
-route work through Livepeer's on-chain capability marketplace with
-proper quote-aware routing and payment minting.
+route work through Livepeer's capability marketplace. The LOC owns route
+selection and payment minting; the gateway opens a job per request and
+forwards it to the broker the LOC picks.
 
 Agents should start at [AGENTS.md](./AGENTS.md). Humans can use this
 README as the main overview.
@@ -26,33 +27,34 @@ This repo contains:
   - a waitlist / verify / approve / API-key shell
   - portal and admin backend routes
   - production serving for `web/site`, `web/portal`, and `web/admin`
-  - resolver and payer daemon clients
+  - a typed HTTP client for the LOC clearinghouse
 - `web/site/`: zero-build Lit marketing and waitlist site
 - `web/portal/`: zero-build Lit user portal with account, keys, health,
   playground, and usage
 - `web/admin/`: zero-build Lit admin with waitlist, users, usage,
   health, and registry diagnostics
-- `proto/`: vendored gRPC contracts shared with the Livepeer daemons
 
-This repo does not embed the Livepeer daemon implementations. It uses
-the daemon stack exposed by `livepeer-network-modules`, especially:
-- `service-registry-daemon`
-- `payment-daemon`
+This repo holds no chain keys and never talks to the chain directly. It
+delegates route selection and payment minting to the **LOC — Livepeer
+Open Clearinghouse** (`https://loc.cloudspe.com` by default), reached
+over HTTPS with an `X-API-Key` header.
 
 ## Why It Exists
 
 This project demonstrates a practical application architecture for the
 Livepeer network:
-- discover capabilities from the on-chain registry
-- select payment-ready routes from the resolver daemon
-- mint per-request payment envelopes via the payer daemon
-- forward OpenAI-shaped requests to capability brokers
-- preserve enough quote / route metadata for auditing and debugging
+- discover capabilities from the LOC clearinghouse
+- open a job per request — the LOC selects a route AND mints the
+  payment envelope in one call
+- forward OpenAI-shaped requests to the broker the LOC returns
+- settle actual usage afterwards so the LOC refunds the unused part of
+  each estimate
+- preserve enough job / route metadata for auditing and debugging
 
 It is intentionally opinionated:
-- on-chain only
+- clearinghouse-mediated only
+- no daemon sidecars, no local chain keys
 - no static overlay routing
-- no unsigned-manifest mode
 - no local hardcoded model catalog
 - no local fallback broker path
 
@@ -90,14 +92,12 @@ flowchart LR
   ADMIN[web/admin] -->|served by gateway| GW
 
   GW --> DB[(Postgres)]
-  GW --> REG[service-registry-daemon]
-  GW --> PAY[payment-daemon]
+  GW -->|jobs + settle| LOC[LOC clearinghouse]
   GW --> BROKER[capability-broker]
   BROKER --> WORKER[capability worker]
   GW --> EMAIL[Resend]
 
-  REG --> CHAIN[(EVM chain)]
-  PAY --> CHAIN
+  LOC --> CHAIN[(EVM chain<br/>route selection + PM tickets)]
 ```
 
 ## Data Flow
@@ -106,13 +106,13 @@ flowchart LR
 flowchart TD
   A[Client request] --> B[Bearer or session auth]
   B --> C[Open reservation]
-  C --> D[Resolve live routes]
-  D --> E[Mint payment envelope]
-  E --> F[Dispatch to broker]
+  C --> D[Open LOC job: route + payment envelope]
+  D --> F[Dispatch to broker with Livepeer-Payment]
   F --> G[Capability worker executes]
   G --> H[Gateway returns response]
-  H --> I[Commit or refund reservation]
-  I --> J[Portal and admin can inspect usage]
+  H --> I[Commit or refund reservation + enqueue settle intent]
+  I --> K[Background settler reports actual units to LOC]
+  K --> J[Portal and admin can inspect usage]
 ```
 
 ## Process Flow
@@ -122,20 +122,18 @@ sequenceDiagram
   participant C as Client
   participant G as Gateway
   participant DB as Postgres
-  participant R as Registry daemon
-  participant P as Payer daemon
+  participant L as LOC clearinghouse
   participant B as Broker
 
   C->>G: POST /v1/*
   G->>DB: validate key + open usage_reservations row
-  G->>R: SelectMany(capability, offering/model)
-  R-->>G: quote-aware candidate routes
-  G->>P: CreatePayment(accepted_price, funding)
-  P-->>G: payment blob
-  G->>B: forward request + Livepeer headers
+  G->>L: POST /v1/jobs {capability, offering, estimated_units}
+  L-->>G: {job_id, broker_url, mode, payment_envelope, ...}
+  G->>B: forward request + Livepeer-Payment header
   B-->>G: response or stream
-  G->>DB: commit or refund reservation
+  G->>DB: commit or refund reservation + enqueue settle intent
   G-->>C: OpenAI-shaped response
+  Note over G,L: background settler later POSTs<br/>/v1/jobs/{id}/settle {actual_units, outcome}
 ```
 
 ## Data Model
@@ -210,11 +208,10 @@ erDiagram
 
 | Path | Purpose |
 |---|---|
-| [gateway/](./gateway/) | TypeScript backend, routing, auth, usage tracking, daemon clients |
+| [gateway/](./gateway/) | TypeScript backend, routing, auth, usage tracking, LOC client |
 | [web/site/](./web/site/) | Marketing site and waitlist signup |
 | [web/portal/](./web/portal/) | User portal and playground |
 | [web/admin/](./web/admin/) | Operator/admin UI |
-| [proto/](./proto/) | Vendored gRPC contracts |
 | [docs/](./docs/) | Design docs, product specs, exec plans |
 
 ## Application Architecture
@@ -225,9 +222,10 @@ The gateway is the center of the system. It:
 - exposes OpenAI-compatible endpoints
 - validates API keys and portal/admin credentials
 - opens, commits, and refunds usage reservations
-- selects live routes from `service-registry-daemon`
-- mints payment envelopes through `payment-daemon`
-- forwards requests to the selected capability broker
+- opens a LOC job per request (the LOC selects the route AND mints the
+  payment envelope)
+- forwards requests to the broker the LOC returns
+- settles actual usage back to the LOC via a durable background task
 - stores a cached public model catalog in Postgres
 
 ### UI responsibilities
@@ -237,26 +235,29 @@ The three `web/` apps are zero-build Lit SPAs:
 - `portal`: user-facing account, keys, network health, playground, and
   usage
 - `admin`: waitlist management, user inspection, usage, network health,
-  and deep registry diagnostics
+  and LOC / catalog diagnostics
 
 ### Catalog vs hot-path routing
 
 There are two distinct paths:
 - hot-path routing:
-  request-time resolver selection using `SelectMany`
+  request-time `POST /v1/jobs` to the LOC, which returns a single
+  route plus its payment envelope
 - catalog/debug path:
-  background refresh from `registryCatalog.inspect()` into the `models`
-  table for `/v1/models` and diagnostics
+  background refresh from the LOC `GET /v1/capabilities` into the
+  `models` table for `/v1/models` and diagnostics
 
-That split is intentional. Request routing must stay live and
-quote-aware. Public catalog reads must stay cheap and cacheable.
+That split is intentional. Request routing must go through the LOC so
+selection and payment stay consistent. Public catalog reads must stay
+cheap and cacheable.
 
 ### Model identity
 
-This gateway supports user-facing OpenAI `model` ids even when the
-resolver's internal offering keys differ. On the hot path, the selector
-can map a requested model id to one or more live offerings for the same
-capability before dispatch.
+The model id is the LOC offering id. `/v1/models` rows are built from
+the LOC capability catalog; the gateway no longer maps user-facing
+aliases onto internal offering keys. Display metadata (name,
+description, provider, category) is populated only by operator
+overrides — it is not catalog-sourced.
 
 ### Supported API surface
 
@@ -305,15 +306,14 @@ The main groups are:
 - `RESEND_BASE_URL`
 - `FROM_EMAIL`
 
-### Livepeer daemon and chain configuration
+### LOC clearinghouse
 
-- `CHAIN_RPC`
-- `CHAIN_ID`
-- `AI_SERVICE_REGISTRY_ADDRESS`
-- `CONTROLLER_ADDRESS`
-- `LIVEPEER_KEYSTORE_DIR`
-- `LIVEPEER_REGISTRY_DAEMON_TAG`
-- `LIVEPEER_PAYER_DAEMON_TAG`
+- `LOC_BASE_URL` (default `https://loc.cloudspe.com`)
+- `LOC_API_KEY` (required — sent as `X-API-Key`)
+- `LOC_TIMEOUT_MS`
+- `LOC_SETTLE_INTERVAL_MS` (background settler cadence, default 15s)
+- `LOC_SETTLE_MAX_ATTEMPTS` (per-job settle retries, default 20)
+- `LOC_JOB_RETRIES` (job-open retries on 429/5xx/mode-mismatch, default 2)
 
 ### Refresh and rate limiting
 
@@ -365,12 +365,11 @@ Fill at least:
 - `ADMIN_TOKEN`
 - `API_KEY_HASH_PEPPER`
 - `IP_HASH_PEPPER`
-- `CHAIN_RPC`
-- `AI_SERVICE_REGISTRY_ADDRESS`
-- `LIVEPEER_KEYSTORE_DIR`
+- `LOC_API_KEY`
 
-The repo is on-chain only. The gateway expects a real resolver daemon
-and payer daemon stack.
+The gateway holds no chain keys. For a working `/v1/*` stack it needs a
+reachable LOC clearinghouse and an `LOC_API_KEY` whose account holds a
+credit balance. There is no local resolver / payer daemon to run.
 
 ### 3. Start the backend stack
 
@@ -420,7 +419,7 @@ curl http://localhost:4001/v1/models
 
 Important:
 - `/v1/models` can return `503 models_cache_unavailable` briefly while
-  the first registry refresh has not landed yet
+  the first catalog refresh has not landed yet
 - `/v1/models` can return `503 models_cache_stale` if the cached model
   snapshot is older than the allowed age
 
@@ -437,20 +436,22 @@ make smoke
 - the playground uses the real `/v1/*` endpoints
 - speech voice options are derived from published model metadata when a
   speech model advertises them
+- `make loc-smoke` opens a 1-unit job and settles 0 against the live LOC
 - admin and portal health are intentionally different:
   - portal: concise user-facing availability
-  - admin: operator-facing capability and registry diagnostics
+  - admin: operator-facing capability, LOC, and catalog diagnostics
 
 ## Deployment
 
 For production deployment, use [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 The important operational constraints are:
-- daemon contracts must stay aligned with the gateway
+- the LOC must be reachable and `LOC_API_KEY` valid before serving `/v1/*`
+- the LOC account must hold enough credit balance for the estimate
+  charged at job issuance
 - the DB migrations must run before serving traffic
-- the payer keystore must exist and be funded appropriately
-- resolver and payer sockets must be reachable by the gateway container
-- public `/v1/models` depends on a fresh registry-backed cache
+- the background settler must keep up so refunds aren't delayed
+- public `/v1/models` depends on a fresh LOC-backed cache
 
 ## What Else Is Worth Documenting
 
@@ -458,9 +459,10 @@ The repo is in decent shape, but the following additions would still add
 value:
 - a focused operator runbook for common failures:
   - stale model cache
-  - resolver reachable but no candidates
-  - payer reachable but payment minting failures
-  - broker failures vs route failures
+  - LOC reachable but no offerings for a capability
+  - LOC job-open failures / insufficient credit balance
+  - settle backlog growing (refunds delayed)
+  - broker failures vs LOC mode mismatches
 - a capability-by-capability product matrix:
   - request shape
   - interaction mode
@@ -471,12 +473,11 @@ value:
   - capability
   - offering
   - model id
-  - quote
-  - route fingerprint
-  - constraint fingerprint
+  - LOC job / work id
+  - payment envelope
+  - settle intent
 - a troubleshooting page for local development:
-  - socket permissions
-  - keystore mounting
+  - LOC API key / reachability
   - empty `/v1/models`
   - stale cache responses
   - portal/admin auth issues

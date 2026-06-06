@@ -1,21 +1,20 @@
 // Entry point. Boot order:
 //   1. Load config + warn on missing peppers.
 //   2. Connect Postgres + run migrations.
-//   3. Init payer-daemon gRPC client (best-effort; warns if unset).
-//   4. Build route selector + registry catalog.
-//   5. Start background registry refresh task.
+//   3. Build LOC client (health probe is best-effort — a LOC outage
+//      degrades /v1/* to 503s, it doesn't take the gateway down).
+//   4. Build registry catalog (LOC-backed).
+//   5. Start background registry refresh + LOC settler tasks.
 //   6. Build email client.
 //   7. Build Fastify server, listen.
-
-import { existsSync } from 'node:fs';
 
 import { loadConfig } from './config.js';
 import { createDb, createPool, runMigrations } from './db.js';
 import { createEmailClient } from './email/index.js';
 import { buildServer } from './server.js';
-import * as payment from './proxy/livepeer/payment.js';
+import { createLocClient } from './loc/client.js';
+import { startSettler } from './loc/settler.js';
 import { createRateLimiter } from './proxy/rateLimit.js';
-import { createRouteSelector } from './proxy/service/routeSelector.js';
 import { createRegistryCatalog } from './registry/catalog.js';
 import { startRegistryRefresh } from './registry/refresh.js';
 
@@ -48,22 +47,27 @@ async function main(): Promise<void> {
     },
   });
 
-  // ── payer-daemon ────────────────────────────────────────────────
-  if (!existsSync(config.payerDaemonSocket)) {
-    throw new Error(`payer-daemon socket not present: ${config.payerDaemonSocket}`);
-  }
-  await payment.init({
-    socketPath: config.payerDaemonSocket,
-    protoRoot: config.paymentProtoRoot,
+  // ── LOC clearinghouse ───────────────────────────────────────────
+  const loc = createLocClient({
+    baseUrl: config.locBaseUrl,
+    apiKey: config.locApiKey,
+    timeoutMs: config.locTimeoutMs,
   });
-  // eslint-disable-next-line no-console
-  console.log(
-    `[payer] connected to payer-daemon at ${config.payerDaemonSocket}`,
-  );
+  try {
+    const locHealth = await loc.health();
+    // eslint-disable-next-line no-console
+    console.log(
+      `[loc] connected to ${config.locBaseUrl} (version ${locHealth.version}, env ${locHealth.env})`,
+    );
+  } catch (err) {
+    // Warn-and-continue: DB-backed endpoints stay up; /v1/* will 503
+    // and /health reports the LOC as down until it recovers.
+    // eslint-disable-next-line no-console
+    console.warn(`[loc] health probe failed for ${config.locBaseUrl}:`, err);
+  }
 
-  // ── route selector ───────────────────────────────────────────────
-  const registryCatalog = createRegistryCatalog(config);
-  const routeSelector = createRouteSelector(config, registryCatalog);
+  // ── registry catalog (LOC-backed) ─────────────────────────────────
+  const registryCatalog = createRegistryCatalog(loc);
 
   // ── email ────────────────────────────────────────────────────────
   const email = createEmailClient({
@@ -89,16 +93,23 @@ async function main(): Promise<void> {
     db,
     pool,
     email,
-    routeSelector,
+    loc,
     registryCatalog,
     rateLimiter,
   });
 
-  // ── registry refresh ─────────────────────────────────────────────
+  // ── background tasks ──────────────────────────────────────────────
   const cancelRefresh = startRegistryRefresh({
     registryCatalog,
     db,
     intervalMs: config.registryRefreshIntervalMs,
+    log: app.log,
+  });
+  const cancelSettler = startSettler({
+    db,
+    loc,
+    intervalMs: config.locSettleIntervalMs,
+    maxAttempts: config.locSettleMaxAttempts,
     log: app.log,
   });
 
@@ -106,10 +117,9 @@ async function main(): Promise<void> {
     app.log.info({ signal }, 'shutting down');
     try {
       cancelRefresh();
+      cancelSettler();
       rateLimiter.stop();
-      payment.shutdown();
       await registryCatalog.close?.();
-      await routeSelector.close?.();
       await app.close();
       await pool.end();
       process.exit(0);

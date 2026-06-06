@@ -9,7 +9,6 @@ import client, { Counter, Histogram, Registry } from 'prom-client';
 import type { FastifyInstance } from 'fastify';
 
 import type { ServerDeps } from './server.js';
-import { renderRouteHealthMetrics, summarizeRouteHealth } from './proxy/service/genericRouteHealth.js';
 
 const registry = new Registry();
 client.collectDefaultMetrics({ register: registry, prefix: 'openai_service_' });
@@ -41,6 +40,13 @@ export const proxyReservationsTotal = new Counter({
 export const waitlistSignupsTotal = new Counter({
   name: 'openai_service_waitlist_signups_total',
   help: 'Public waitlist signups received.',
+  registers: [registry],
+});
+
+export const proxySettleTotal = new Counter({
+  name: 'openai_service_proxy_settle_total',
+  help: 'LOC job settlement outcomes (background settler).',
+  labelNames: ['outcome'] as const,
   registers: [registry],
 });
 
@@ -83,20 +89,7 @@ export async function registerMetricsRoute(
       }
     }
 
-    // Compose: default registry + route-health renderer (uses
-    // RouteSelector's own snapshot rather than copying).
-    const snapshots = deps.routeSelector.inspectHealth();
-    const summary = summarizeRouteHealth(snapshots);
-    const metrics = deps.routeSelector.inspectMetrics();
-    const routeHealthText = renderRouteHealthMetrics(
-      'openai-service-gateway',
-      summary,
-      metrics,
-    );
-
     const main = await registry.metrics();
-    void reply
-      .header('Content-Type', registry.contentType)
-      .send(main + '\n' + routeHealthText);
+    void reply.header('Content-Type', registry.contentType).send(main);
   });
 }

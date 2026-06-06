@@ -39,15 +39,11 @@ COPY --from=builder /app/gateway/migrations ./gateway/migrations
 COPY --from=builder /app/gateway/package.json ./gateway/package.json
 COPY --from=builder /app/web ./web
 
-# Protos are loaded at runtime; ship them.
-COPY proto/ ./proto/
-
 WORKDIR /app/gateway
 
 EXPOSE 4001
 
-# Run as the same non-root uid/gid the daemon images use so the gateway can
-# open their shared Unix sockets.
+# Non-root runtime user.
 USER 65532:65532
 
 CMD ["node", "./dist/index.js"]

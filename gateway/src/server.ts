@@ -21,8 +21,8 @@ import {
 import type { Config } from './config.js';
 import type { Db, Pool } from './db.js';
 import type { EmailClient } from './email/index.js';
+import type { LocClient } from './loc/client.js';
 import type { RateLimiter } from './proxy/rateLimit.js';
-import type { RouteSelector } from './proxy/service/routeSelector.js';
 import type { RegistryCatalog } from './registry/catalog.js';
 
 import { attachHttpMetrics, registerMetricsRoute } from './metrics.js';
@@ -43,7 +43,7 @@ export interface ServerDeps {
   db: Db;
   pool: Pool;
   email: EmailClient;
-  routeSelector: RouteSelector;
+  loc: LocClient;
   registryCatalog: RegistryCatalog;
   rateLimiter: RateLimiter;
 }
