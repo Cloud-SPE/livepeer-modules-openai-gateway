@@ -4,7 +4,7 @@ import { api } from '/admin/static/lib/api.js';
 class CcRegistry extends LitElement {
   static properties = {
     candidates: { state: true },
-    health: { state: true },
+    loc: { state: true },
     models: { state: true },
     summary: { state: true },
     error: { state: true },
@@ -13,7 +13,7 @@ class CcRegistry extends LitElement {
   constructor() {
     super();
     this.candidates = [];
-    this.health = null;
+    this.loc = null;
     this.models = [];
     this.summary = null;
     this.error = '';
@@ -29,14 +29,14 @@ class CcRegistry extends LitElement {
   async #load() {
     this.error = '';
     try {
-      const [c, h, m, s] = await Promise.all([
+      const [c, l, m, s] = await Promise.all([
         api('/admin/registry/candidates'),
-        api('/admin/registry/health'),
+        api('/admin/registry/loc'),
         api('/admin/registry/models'),
         api('/admin/registry/summary'),
       ]);
       this.candidates = c?.data ?? [];
-      this.health = h ?? null;
+      this.loc = l ?? null;
       this.models = m?.data ?? [];
       this.summary = s ?? null;
     } catch (err) {
@@ -47,7 +47,7 @@ class CcRegistry extends LitElement {
   render() {
     return html`
       <div class="card">
-        <h2>Registry summary ${helpTip('Compares the live resolver snapshot against the cached models table used by /v1/models.')}</h2>
+        <h2>Registry summary ${helpTip('Compares the live LOC capability snapshot against the cached models table used by /v1/models.')}</h2>
         ${this.summary
           ? html`
               <p class="msg">
@@ -61,7 +61,7 @@ class CcRegistry extends LitElement {
                 max ${Math.round(this.summary.maxCacheAgeMs / 1000)}s
               </p>
               <details class="diag">
-                <summary>Live vs cache diff ${helpTip('Live only means present in the current resolver snapshot but not in the cached model table. Cached only means still present in the cached table but not currently live in the resolver snapshot.')}</summary>
+                <summary>Live vs cache diff ${helpTip('Live only means present in the current LOC capability snapshot but not in the cached model table. Cached only means still present in the cached table but not currently live in the LOC snapshot.')}</summary>
                 <div class="kv-list">
                   <div>
                     <span class="msg">live only</span>
@@ -78,10 +78,10 @@ class CcRegistry extends LitElement {
       </div>
 
       <div class="card">
-        <h2>Live candidates ${helpTip('These rows come directly from the live resolver catalog path, not from the cached models table.')} <button class="ghost" @click=${() => this.#load()}>Refresh</button></h2>
+        <h2>Live candidates ${helpTip('These rows come directly from the live LOC catalog path, not from the cached models table.')} <button class="ghost" @click=${() => this.#load()}>Refresh</button></h2>
         ${this.error ? html`<p class="msg error">${this.error}</p>` : ''}
         ${this.candidates.length === 0
-          ? html`<p class="msg">No candidates from the resolver.</p>`
+          ? html`<p class="msg">No candidates from the LOC.</p>`
           : html`<table>
               <thead>
                 <tr><th>Capability</th><th>Model</th><th>Mode</th><th>Broker</th><th>Price</th><th>Quote</th></tr>
@@ -123,19 +123,18 @@ class CcRegistry extends LitElement {
       </div>
 
       <div class="card">
-        <h2>Route health ${helpTip('In-memory failure and cooldown tracking for candidate routes. This is process-local state and resets on restart.')}</h2>
-        ${this.health
+        <h2>LOC clearinghouse ${helpTip('Reachability, operator credit balance, and the pending-settle backlog against the LOC (Livepeer Open Clearinghouse).')}</h2>
+        ${this.loc
           ? html`
               <p class="msg">
-                Attempts ${this.health.metrics.attemptsTotal} ·
-                successes ${this.health.metrics.successesTotal} ·
-                retryable ${this.health.metrics.retryableFailuresTotal} ·
-                non-retryable ${this.health.metrics.nonRetryableFailuresTotal} ·
-                cooldowns ${this.health.metrics.cooldownsOpenedTotal}
+                ${this.loc.health
+                  ? `Reachable · version ${this.loc.health.version} · env ${this.loc.health.env}`
+                  : `Unreachable${this.loc.healthError ? ` — ${this.loc.healthError}` : ''}`}
               </p>
-              <details><summary>${this.health.snapshots.length} route snapshots</summary>
-                <pre>${JSON.stringify(this.health.snapshots, null, 2)}</pre>
-              </details>
+              <p class="msg">
+                Balance ${this.loc.balanceWei != null ? `${this.loc.balanceWei} wei` : (this.loc.balanceError ?? '—')} ·
+                pending settlements ${this.loc.pendingSettlements}
+              </p>
             `
           : html`<p class="msg">—</p>`}
       </div>

@@ -7,7 +7,8 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp } from './service/routeDispatch.js';
+import { dispatchReqresp, jobRefFromError } from '../loc/dispatch.js';
+import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
@@ -37,8 +38,8 @@ export async function registerImagesRoute(
       const capability = Capability.ImagesGenerations;
       const requestId = readOrSynthRequestId(req);
 
-      const offering = typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
-      if (!offering) {
+      const requestedModel = typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
+      if (!requestedModel) {
         return reply
           .code(400)
           .header(HEADER.REQUEST_ID, requestId)
@@ -50,19 +51,28 @@ export async function registerImagesRoute(
       const handle = await openReservation(deps, {
         apiKeyId: auth.apiKeyId,
         capability,
-        model: offering,
+        model: requestedModel,
         estimatedWorkUnits: typeof body.n === 'number' && body.n > 0 ? body.n : 1,
       });
+
+      const { offering, runnerModel } = await resolveRoute({
+        catalog: deps.registryCatalog,
+        modelMap: deps.config.locModelMap,
+        capability,
+        requestedModel,
+      });
+      const upstreamBody =
+        runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
         const estimatedUnits = typeof body.n === 'number' && body.n > 0 ? body.n : 1;
         const dispatched = await dispatchReqresp({
-          routeSelector: deps.routeSelector,
-          request: req,
+          loc: deps.loc,
           capability,
           offering,
           estimatedUnits,
-          body: JSON.stringify(body),
+          maxJobAttempts: deps.config.locJobRetries + 1,
+          body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
           requestId,
         });
@@ -70,6 +80,7 @@ export async function registerImagesRoute(
         await commitReservation(deps, handle, {
           workUnits: estimatedUnits,
           statusCode: dispatched.result.status,
+          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -77,11 +88,12 @@ export async function registerImagesRoute(
           .header(HEADER.REQUEST_ID, requestId)
           .send(Buffer.from(dispatched.result.body));
       } catch (err) {
-        const candidate = (err as { routeCandidate?: import('./service/routeSelector.js').RouteCandidate }).routeCandidate;
+        const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
         await refundReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
+          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }

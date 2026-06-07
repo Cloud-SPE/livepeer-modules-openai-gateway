@@ -1,4 +1,4 @@
-// Admin: inspect what the route selector sees right now.
+// Admin: inspect what the LOC-backed catalog sees right now.
 
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import type { ServerDeps } from '../../server.js';
 import * as modelsRepo from '../../repo/models.js';
+import * as usageRepo from '../../repo/usageReservations.js';
 import { loadActiveModelHealth } from '../../registry/modelHealth.js';
 import {
   ErrorBody,
@@ -19,27 +20,17 @@ const CandidatesResponse = z
   .object({ data: z.array(RouteCandidatePublic) })
   .meta({ id: 'AdminRegistryCandidates' });
 
-const HealthSnapshot = z.object({
-  key: z.string(),
-  consecutiveFailures: z.number(),
-  coolingDown: z.boolean(),
-  cooldownUntil: z.number().nullable(),
-  lastFailureAt: z.number().nullable(),
-  lastFailureReason: z.string().nullable(),
-  lastSuccessAt: z.number().nullable(),
-});
-
-const HealthMetrics = z.object({
-  attemptsTotal: z.number(),
-  successesTotal: z.number(),
-  retryableFailuresTotal: z.number(),
-  nonRetryableFailuresTotal: z.number(),
-  cooldownsOpenedTotal: z.number(),
-});
-
-const HealthResponse = z
-  .object({ snapshots: z.array(HealthSnapshot), metrics: HealthMetrics })
-  .meta({ id: 'AdminRegistryHealth' });
+const LocStatusResponse = z
+  .object({
+    health: z
+      .object({ status: z.string(), version: z.string(), env: z.string() })
+      .nullable(),
+    healthError: z.string().nullable(),
+    balanceWei: z.string().nullable(),
+    balanceError: z.string().nullable(),
+    pendingSettlements: z.number(),
+  })
+  .meta({ id: 'AdminRegistryLocStatus' });
 
 const ModelRow = z.object({
   modelId: z.string(),
@@ -195,7 +186,7 @@ export async function registerAdminRegistryRoutes(
       schema: {
         tags: ['admin'],
         summary: 'Live registry catalog candidates',
-        description: 'Current live resolver snapshot from the registry catalog surface.',
+        description: 'Current live capability snapshot from the LOC-backed catalog surface.',
         security: ADMIN_SECURITY,
         response: { 200: CandidatesResponse, 401: ErrorBody, 503: ErrorBody },
       },
@@ -223,19 +214,37 @@ export async function registerAdminRegistryRoutes(
   );
 
   f.get(
-    '/admin/registry/health',
+    '/admin/registry/loc',
     {
       schema: {
         tags: ['admin'],
-        summary: 'Route-health tracker state',
+        summary: 'LOC clearinghouse status',
+        description:
+          'LOC reachability, operator credit balance, and the pending-settle backlog.',
         security: ADMIN_SECURITY,
-        response: { 200: HealthResponse, 401: ErrorBody, 503: ErrorBody },
+        response: { 200: LocStatusResponse, 401: ErrorBody },
       },
     },
-    async () => ({
-      snapshots: deps.routeSelector.inspectHealth(),
-      metrics: deps.routeSelector.inspectMetrics(),
-    }),
+    async () => {
+      const [health, balance, pendingSettlements] = await Promise.all([
+        deps.loc.health().then(
+          (h) => ({ value: h, error: null as string | null }),
+          (err: unknown) => ({ value: null, error: errMsg(err) }),
+        ),
+        deps.loc.getBalance().then(
+          (b) => ({ value: b.amountWei, error: null as string | null }),
+          (err: unknown) => ({ value: null, error: errMsg(err) }),
+        ),
+        usageRepo.pendingSettleCount(deps.db).catch(() => 0),
+      ]);
+      return {
+        health: health.value,
+        healthError: health.error,
+        balanceWei: balance.value,
+        balanceError: balance.error,
+        pendingSettlements,
+      };
+    },
   );
 
   f.get(
@@ -280,6 +289,10 @@ export async function registerAdminRegistryRoutes(
 
 function bytesToHex(bytes: Uint8Array): string | null {
   return bytes.length > 0 ? Buffer.from(bytes).toString('hex') : null;
+}
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function uniq(values: string[]): string[] {

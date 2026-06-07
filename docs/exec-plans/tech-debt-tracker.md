@@ -5,22 +5,23 @@ Known debt that doesn't yet have a plan. Promote items into
 
 ## Open
 
-### mock-broker / mock-payer harness for in-CI end-to-end coverage
+### mock-LOC harness for in-CI end-to-end coverage
 
-**Found**: 2026-05-18 (during plan 0001)
+**Found**: 2026-05-18 (during plan 0001); reframed for the LOC era
 **Impact**: `make smoke` exercises every code path *except* an actual
 upstream call. The proxy → broker → runner path is unit-tested via
-chat-helpers + registry-refresh tests, and verified to refund on
-failure, but no test boots a fake broker + fake payer-daemon over UDS
-to validate a happy-path 200 with usage settlement.
-**Surface**: `gateway/src/proxy/livepeer/payment.ts` (needs a UDS
-gRPC mock client/server), `gateway/src/proxy/service/routeSelector.ts`
-(same for registry), `scripts/smoke.sh` (extend to spin up the
-fakes via compose profile).
-**Fix shape**: Two tiny Node/Go services that speak the two gRPC
-proto surfaces; a `smoke` compose profile that brings them up
-alongside the gateway; smoke script gains a full `/v1/chat/completions`
-roundtrip with a canned response. Plan called for ~200 lines.
+chat-helpers + catalog-refresh tests, and verified to refund/settle on
+failure, but no test boots a fake LOC + fake broker to validate a
+happy-path 200 with job open → dispatch → settle. (`make loc-smoke`
+hits the *live* LOC, which isn't suitable for CI.)
+**Surface**: `gateway/src/loc/{client,dispatch,settler}.ts` (need an
+HTTP mock for the LOC), `scripts/smoke.sh` (extend to spin up the fakes
+via a compose profile).
+**Fix shape**: A tiny Node service that speaks the LOC HTTP surface
+(`/v1/jobs`, `/v1/jobs/{id}/settle`, `/v1/capabilities`, `/health`) plus
+a stub broker; a `smoke` compose profile that brings them up alongside
+the gateway; smoke script gains a full `/v1/chat/completions` roundtrip
+with a canned response and an asserted settle.
 
 ### `infra/` directory — observability + reverse-proxy configs
 
@@ -33,8 +34,8 @@ shorten time-to-first-deploy.
 `grafana/dashboards/*.json`, `prometheus/scrape-config.yaml`,
 `traefik/dynamic-config.yaml`, maybe a `compose.infra.yml`.
 **Fix shape**: Use the metric names already emitted by
-`gateway/src/metrics.ts`. Reference dashboard for the four
-counters + route-health gauges + Node defaults.
+`gateway/src/metrics.ts`. Reference dashboard for the reservation +
+settle counters + Node defaults, plus `/health`'s `pendingSettlements`.
 
 ### CI: run `make smoke` in GitHub Actions
 
@@ -106,16 +107,6 @@ token bucket).
 script. Replace the `RateLimiter` class while keeping the same
 preHandler signature.
 
-### Health check should ping payer-daemon over gRPC, not just stat the socket
-
-**Found**: 2026-05-18 (during plan 0001 follow-up)
-**Impact**: Socket exists ≠ daemon healthy. A wedged daemon
-passes `/health` today.
-**Surface**: `gateway/src/routes/health.ts` checkSocket function.
-**Fix shape**: Add a cheap `Health` RPC call alongside socket
-stat. Cache the result with a short TTL to avoid scrape-frequency
-RPC traffic. Similar for the registry daemon.
-
 ### `proxy/livepeer/` doesn't trim API-key whitespace on hashApiKey
 
 **Found**: 2026-05-18 (during plan 0001 product-spec writing)
@@ -133,13 +124,13 @@ Add a test that `hashApiKey('  sk-x  ') === hashApiKey('sk-x')`.
 **Impact**: `core-beliefs.md` §4 + `ARCHITECTURE.md` §3 describe a
 one-way dependency rule (routes → proxy → wire) that today is only
 enforced by reviewer attention. An agent could introduce an upward
-import (`proxy/livepeer/payment.ts` importing from
-`routes/portal/auth.ts`, say) and `tsc` would be happy.
+import (`loc/dispatch.ts` importing from `routes/portal/auth.ts`, say)
+and `tsc` would be happy.
 **Surface**: `.eslintrc` or equivalent; tooling at `eslint-plugin-boundaries`
 or `dependency-cruiser`. Wire into `pnpm -F gateway lint`.
-**Fix shape**: Declare the four bands (`routes`, `proxy`, `repo/registry/email`,
-`primitives`) and forbid upward imports. ~30 lines of config plus
-the dep install.
+**Fix shape**: Declare the four bands (`routes`, `proxy/loc`,
+`repo/registry/email`, `primitives`) and forbid upward imports. ~30
+lines of config plus the dep install.
 
 ### `/admin/waitlist/:id/reject` doesn't check current status
 

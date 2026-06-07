@@ -27,6 +27,8 @@ export interface CommitInput {
   committedWorkUnits: number | null;
   latencyMs: number;
   statusCode: number;
+  /** LOC job to settle with the committed units (durable enqueue). */
+  locJobId?: string | null;
 }
 
 export async function commit(db: Db, input: CommitInput): Promise<void> {
@@ -38,8 +40,25 @@ export async function commit(db: Db, input: CommitInput): Promise<void> {
       latencyMs: input.latencyMs,
       statusCode: input.statusCode,
       resolvedAt: new Date(),
+      ...settleEnqueue(input.locJobId, input.committedWorkUnits ?? 0, 'committed'),
     })
     .where(eq(usageReservations.workId, input.workId));
+}
+
+/** Settle-intent columns written alongside commit/refund. One DB write
+ * doubles as the durable settle queue entry (see loc/settler.ts). */
+function settleEnqueue(
+  locJobId: string | null | undefined,
+  actualUnits: number,
+  outcome: string,
+): Partial<typeof usageReservations.$inferInsert> {
+  if (!locJobId) return {};
+  return {
+    locJobId,
+    settleState: 'pending',
+    settleActualUnits: Math.max(0, Math.floor(actualUnits)),
+    settleOutcome: outcome,
+  };
 }
 
 export interface RouteMetadataUpdate {
@@ -84,6 +103,8 @@ export interface RefundInput {
   latencyMs: number;
   statusCode: number;
   errorText: string;
+  /** LOC job to settle with 0 units (full refund of the estimate). */
+  locJobId?: string | null;
 }
 
 export async function refund(db: Db, input: RefundInput): Promise<void> {
@@ -95,8 +116,78 @@ export async function refund(db: Db, input: RefundInput): Promise<void> {
       statusCode: input.statusCode,
       errorText: input.errorText,
       resolvedAt: new Date(),
+      ...settleEnqueue(input.locJobId, 0, 'refunded'),
     })
     .where(eq(usageReservations.workId, input.workId));
+}
+
+// ── settle queue (consumed by loc/settler.ts) ───────────────────────
+
+export interface PendingSettlement {
+  id: string;
+  locJobId: string;
+  settleActualUnits: number;
+  settleOutcome: string | null;
+  settleAttempts: number;
+}
+
+/** Claim a batch of pending settlements. FOR UPDATE SKIP LOCKED keeps
+ * this safe if a second gateway replica ever runs the settler too. */
+export async function claimPendingSettlements(
+  db: Db,
+  limit: number,
+): Promise<PendingSettlement[]> {
+  const rows = await db.execute(sql`
+    SELECT id, loc_job_id, settle_actual_units, settle_outcome, settle_attempts
+    FROM usage_reservations
+    WHERE settle_state = 'pending' AND loc_job_id IS NOT NULL
+    ORDER BY resolved_at ASC NULLS LAST
+    LIMIT ${limit}
+    FOR UPDATE SKIP LOCKED
+  `);
+  return rows.rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      id: String(r['id']),
+      locJobId: String(r['loc_job_id']),
+      settleActualUnits: Number(r['settle_actual_units'] ?? 0),
+      settleOutcome: r['settle_outcome'] === null ? null : String(r['settle_outcome']),
+      settleAttempts: Number(r['settle_attempts'] ?? 0),
+    };
+  });
+}
+
+export async function markSettled(db: Db, id: string): Promise<void> {
+  await db
+    .update(usageReservations)
+    .set({ settleState: 'settled', settledAt: new Date(), lastSettleError: null })
+    .where(eq(usageReservations.id, id));
+}
+
+/** Record a settle failure; flips to terminal 'failed' at maxAttempts. */
+export async function recordSettleFailure(
+  db: Db,
+  id: string,
+  errorText: string,
+  maxAttempts: number,
+): Promise<void> {
+  await db
+    .update(usageReservations)
+    .set({
+      settleAttempts: sql`${usageReservations.settleAttempts} + 1`,
+      settleState: sql`CASE WHEN ${usageReservations.settleAttempts} + 1 >= ${maxAttempts} THEN 'failed' ELSE 'pending' END`,
+      lastSettleError: errorText.slice(0, 500),
+    })
+    .where(eq(usageReservations.id, id));
+}
+
+/** Pending-settle backlog size, surfaced via /health and metrics. */
+export async function pendingSettleCount(db: Db): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(usageReservations)
+    .where(eq(usageReservations.settleState, 'pending'));
+  return row?.n ?? 0;
 }
 
 export async function listByApiKey(

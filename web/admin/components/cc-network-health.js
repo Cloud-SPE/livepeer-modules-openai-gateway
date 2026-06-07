@@ -29,7 +29,7 @@ class CcNetworkHealth extends LitElement {
     const models = this.health?.models ?? [];
     return html`
       <div class="card">
-        <h2>Network health ${helpTip('Operator-facing health derived from cached models plus the current live resolver snapshot. Use Registry for raw diagnostics.')}</h2>
+        <h2>Network health ${helpTip('Operator-facing health derived from cached models plus the current live LOC capability snapshot. Use Registry for raw diagnostics.')}</h2>
         <p class="msg">
           Operator-facing capability and model availability. This is the concise health view.
           Use the registry tab for raw candidates, cache diffs, and route snapshots.
@@ -38,7 +38,7 @@ class CcNetworkHealth extends LitElement {
       </div>
 
       <div class="card">
-        <h2>Capabilities ${helpTip('Available models are present in the cached model table. Selectable models have at least one live route in the current resolver snapshot.')}</h2>
+        <h2>Capabilities ${helpTip('Available models are present in the cached model table. Selectable models have at least one live offering in the current LOC capability snapshot.')}</h2>
         <div class="health-capability-grid">
           ${capabilities.map((cap) => html`
             <article class="health-card">
@@ -57,7 +57,7 @@ class CcNetworkHealth extends LitElement {
       </div>
 
       <div class="card">
-        <h2>Models ${helpTip('Modes are transport shapes published by the resolver. Offerings are resolver-facing route keys, which may differ from the user-facing model id.')}</h2>
+        <h2>Models ${helpTip('Modes are transport shapes. Offerings are clearinghouse-facing route keys, which may differ from the user-facing model id.')}</h2>
         ${models.length === 0
           ? html`<p class="msg">No model health data.</p>`
           : html`<table>

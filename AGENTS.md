@@ -49,11 +49,10 @@ Top-level components — each has its own surface but no per-component
 
 | Path | What it is |
 |---|---|
-| [`gateway/`](./gateway/) | TypeScript backend — single Fastify service: OpenAI `/v1/*` proxy, waitlist + auth + admin SaaS shell, gRPC clients to `service-registry-daemon` + `payment-daemon`. |
+| [`gateway/`](./gateway/) | TypeScript backend — single Fastify service: OpenAI `/v1/*` proxy, waitlist + auth + admin SaaS shell, HTTP client to the LOC clearinghouse (`gateway/src/loc/`). |
 | [`web/site/`](./web/site/) | Zero-build Lit marketing site + waitlist signup. |
 | [`web/portal/`](./web/portal/) | Zero-build Lit user dashboard (account, API keys, playground). |
-| [`web/admin/`](./web/admin/) | Zero-build Lit admin (waitlist queue, users, usage, registry candidates). |
-| [`proto/`](./proto/) | gRPC protos shared between the gateway and the registry / payer daemons. |
+| [`web/admin/`](./web/admin/) | Zero-build Lit admin (waitlist queue, users, usage, LOC + catalog diagnostics). |
 
 ## Doing work in this repo
 
@@ -63,16 +62,19 @@ Top-level components — each has its own surface but no per-component
 - **Zero-build SPAs.** `web/` apps use Lit + `esm.sh` importmaps + a per-app
   `dev-server.js`. No Vite, no bundler. See [`FRONTEND.md`](./FRONTEND.md)
   for the DOM/CSS invariants.
-- **Gateway pays the network.** Even though customers pay nothing during
-  beta, the gateway mints `Livepeer-Payment` envelopes via the
-  `payment-daemon` for every `/v1/*` request. This is not optional.
-- **Models come from the service registry.** No hardcoded model list, no
-  rate cards. `/v1/models` reflects what the on-chain registry advertises.
+- **Gateway pays the network via the LOC.** Even though customers pay
+  nothing during beta, every `/v1/*` request opens a LOC job that mints
+  the `Livepeer-Payment` envelope and charges the operator's credit
+  balance the estimate; the gateway settles actual usage afterwards. The
+  gateway holds no chain keys. This is not optional.
+- **Models come from the LOC catalog.** No hardcoded model list, no
+  rate cards. `/v1/models` reflects what the LOC capability catalog
+  advertises; the model id is the LOC offering id.
 - **No Stripe, no billing, no rate cards in v1.** Auth shape is
   waitlist → email verify → admin approval → API key by email.
-- **Capability workers are external.** This repo talks to the Livepeer
-  network's capability brokers and daemons; it does not carry local worker
-  implementations.
+- **Capability workers are external.** This repo talks to the LOC
+  clearinghouse and the capability brokers it returns; it does not carry
+  local worker implementations and never talks to the chain directly.
 - **Single root `Makefile`.** Local dev entrypoints live at the repo root.
 
 ## Plan-as-code

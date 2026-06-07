@@ -40,12 +40,27 @@ export const usageReservations = pgTable(
     selectedOffering: text('selected_offering'),
     selectedWorkUnit: text('selected_work_unit'),
     unitsPerPrice: bigint('units_per_price', { mode: 'number' }),
+    // Quote identity columns are daemon-era leftovers: the LOC owns
+    // quote/price bookkeeping, so these stay null. Kept nullable to
+    // avoid a destructive migration of historical rows.
     quoteId: text('quote_id'),
     quoteVersion: text('quote_version'),
     constraintFingerprintHex: text('constraint_fingerprint_hex'),
     routeFingerprintHex: text('route_fingerprint_hex'),
 
     state: text('state').notNull().default('open'),
+
+    // ── LOC settlement (durable async) ────────────────────────────
+    // Written at commit/refund time; the background settler retries
+    // POST /v1/jobs/{loc_job_id}/settle until LOC acks (409
+    // job_already_settled counts as settled).
+    locJobId: text('loc_job_id'),
+    settleState: text('settle_state'), // NULL | 'pending' | 'settled' | 'failed'
+    settleActualUnits: bigint('settle_actual_units', { mode: 'number' }),
+    settleOutcome: text('settle_outcome'),
+    settleAttempts: integer('settle_attempts').notNull().default(0),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    lastSettleError: text('last_settle_error'),
 
     // "work units" = tokens for chat/embeddings, seconds for transcription,
     // image count for image generation, characters for speech.
@@ -75,6 +90,9 @@ export const usageReservations = pgTable(
     openStateIdx: index('idx_usage_reservations_open_state')
       .on(t.state)
       .where(sql`${t.state} = 'open'`),
+    settlePendingIdx: index('idx_usage_reservations_settle_pending')
+      .on(t.settleState)
+      .where(sql`${t.settleState} = 'pending'`),
     stateCheck: check(
       'usage_reservations_state_check',
       sql`${t.state} IN ('open', 'committed', 'refunded')`,

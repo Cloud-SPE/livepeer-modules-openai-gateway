@@ -15,6 +15,16 @@ export async function registerProxyRoutes(
   app: FastifyInstance,
   deps: ServerDeps,
 ): Promise<void> {
+  // Buffer multipart bodies raw — audio-transcriptions forwards the
+  // multipart payload verbatim to the broker and only peeks at the
+  // `model` field via extractMultipartField. Without this parser,
+  // Fastify 415s multipart requests before the handler runs.
+  app.addContentTypeParser(
+    'multipart/form-data',
+    { parseAs: 'buffer' },
+    (_req, body, done) => done(null, body),
+  );
+
   await registerChatRoute(app, deps);
   await registerEmbeddingsRoute(app, deps);
   await registerImagesRoute(app, deps);

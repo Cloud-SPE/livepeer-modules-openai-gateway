@@ -34,7 +34,7 @@ class CcNetworkHealth extends LitElement {
 
     return html`
       <div class="card">
-        <h2>Network health ${helpTip('What this means for your account right now. This view is intentionally simplified and based on the current resolver-backed catalog snapshot.')}</h2>
+        <h2>Network health ${helpTip('What this means for your account right now. This view is intentionally simplified and based on the current clearinghouse-backed catalog snapshot.')}</h2>
         <p class="msg">
           User-facing availability for the current network snapshot. This is intentionally simple:
           it shows what capabilities exist and whether each model is currently selectable.

@@ -1,37 +1,14 @@
 // Env-driven configuration. Validated at boot — fail loud and early.
 //
 // This Config carries two surfaces:
-//   • Proxy core fields (resolverSocket, payer socket, proto roots, …).
-//     Field names match the source openai-gateway so verbatim-copied
-//     proxy/ code resolves them unchanged. See proxy/livepeer/ and
-//     proxy/service/.
+//   • Proxy core fields (LOC clearinghouse URL/key, broker timeout, …).
+//     The gateway sources routes + payment envelopes from the LOC
+//     (Livepeer Open Clearinghouse) HTTP API. See loc/ and proxy/.
 //   • SaaS shell fields (auth pepper, admin token, base URL, …).
 //     These are local to this repo; they support the hand-written
 //     waitlist/sessions/api-keys/admin surfaces.
 
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// REPO_ROOT for proto loading in development. In production, the
-// Dockerfile copies proto/ to /app/proto.
-const REPO_ROOT = resolve(__dirname, '..', '..');
-
-function firstExistingPath(candidates: string[]): string {
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
-  }
-  return candidates[candidates.length - 1]!;
-}
-
-const DEFAULT_PROTO_ROOT = firstExistingPath([
-  resolve('/app', 'proto'),
-  resolve(REPO_ROOT, 'proto'),
-]);
 
 const ConfigSchema = z.object({
   // ── HTTP server ───────────────────────────────────────────────────
@@ -59,18 +36,22 @@ const ConfigSchema = z.object({
   resendBaseUrl: z.string().url().optional(),
   fromEmail: z.string().default('OpenAI Service <noreply@example.com>'),
 
-  // ── Livepeer / proxy core ────────────────────────────────────────
-  // Names mirror the source openai-gateway so verbatim-copied code
-  // under proxy/ continues to work.
-  resolverSocket: z.string().min(1),
-  payerDaemonSocket: z
-    .string()
-    .default('/var/run/livepeer/payer-daemon.sock'),
-  paymentProtoRoot: z.string().default(DEFAULT_PROTO_ROOT),
-  resolverProtoRoot: z.string().default(DEFAULT_PROTO_ROOT),
+  // ── Livepeer Open Clearinghouse (LOC) / proxy core ───────────────
+  // The LOC owns route selection + payment-ticket minting. The gateway
+  // opens a job per upstream call and settles actual units afterwards.
+  locBaseUrl: z.string().url(),
+  locApiKey: z.string().min(1),
+  locTimeoutMs: z.coerce.number().int().positive().default(30000),
+  locSettleIntervalMs: z.coerce.number().int().positive().default(15000),
+  locSettleMaxAttempts: z.coerce.number().int().positive().default(20),
+  locJobRetries: z.coerce.number().int().nonnegative().default(2),
+  /** Offering id → runner-facing model name. The LOC offering id selects
+   * the route, but brokers forward the JSON body verbatim to the runner,
+   * which only accepts its own serving name (e.g. vLLM's model id).
+   * Until the LOC exposes the registry's extra.openai.model, this map
+   * bridges the two. JSON object in LOC_MODEL_MAP. */
+  locModelMap: z.record(z.string(), z.string()).default({}),
   brokerCallTimeoutMs: z.coerce.number().int().positive().default(30000),
-  routeFailureThreshold: z.coerce.number().int().positive().default(2),
-  routeCooldownMs: z.coerce.number().int().positive().default(30000),
   registryRefreshIntervalMs: z.coerce.number().int().positive().default(60_000),
 
   // ── /v1/* rate limit ────────────────────────────────────────────
@@ -86,6 +67,16 @@ const ConfigSchema = z.object({
 type ConfigEnv = z.infer<typeof ConfigSchema>;
 
 export type Config = ConfigEnv;
+
+function parseJsonEnv(name: string): unknown {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Invalid JSON in ${name}: ${(err as Error).message}`);
+  }
+}
 
 export function loadConfig(): Config {
   const parsed = ConfigSchema.safeParse({
@@ -104,13 +95,14 @@ export function loadConfig(): Config {
     resendApiKey: process.env['RESEND_API_KEY'],
     resendBaseUrl: process.env['RESEND_BASE_URL'],
     fromEmail: process.env['FROM_EMAIL'],
-    resolverSocket: process.env['LIVEPEER_RESOLVER_SOCKET'],
-    payerDaemonSocket: process.env['LIVEPEER_PAYER_DAEMON_SOCKET'],
-    paymentProtoRoot: process.env['LIVEPEER_PAYMENT_PROTO_ROOT'],
-    resolverProtoRoot: process.env['LIVEPEER_RESOLVER_PROTO_ROOT'],
+    locBaseUrl: process.env['LOC_BASE_URL'],
+    locApiKey: process.env['LOC_API_KEY'],
+    locTimeoutMs: process.env['LOC_TIMEOUT_MS'],
+    locSettleIntervalMs: process.env['LOC_SETTLE_INTERVAL_MS'],
+    locSettleMaxAttempts: process.env['LOC_SETTLE_MAX_ATTEMPTS'],
+    locJobRetries: process.env['LOC_JOB_RETRIES'],
+    locModelMap: parseJsonEnv('LOC_MODEL_MAP'),
     brokerCallTimeoutMs: process.env['BROKER_CALL_TIMEOUT_MS'],
-    routeFailureThreshold: process.env['LIVEPEER_ROUTE_FAILURE_THRESHOLD'],
-    routeCooldownMs: process.env['LIVEPEER_ROUTE_COOLDOWN_MS'],
     registryRefreshIntervalMs: process.env['REGISTRY_REFRESH_INTERVAL_MS'],
     v1RateLimitPerMinute: process.env['V1_RATE_LIMIT_PER_MINUTE'],
     v1RateLimitBurst: process.env['V1_RATE_LIMIT_BURST'],

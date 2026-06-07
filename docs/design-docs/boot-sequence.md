@@ -7,35 +7,32 @@ connections. Failure modes per step. Graceful shutdown contract.
 
 ```text
 1.  loadConfig()                                                  [throws on bad env]
-      └─ requires LIVEPEER_RESOLVER_SOCKET (on-chain resolver path)
+      └─ requires LOC_API_KEY (+ LOC_BASE_URL, default loc.cloudspe.com)
 
 2.  warn-if-unset peppers (API_KEY_HASH_PEPPER, IP_HASH_PEPPER)    [non-fatal]
 
 3.  createPool(databaseUrl)                                       [lazy — no connection yet]
-4.  createDb(pool)                                                [pure wrapper]
+    createDb(pool)                                                [pure wrapper]
 
-5.  runMigrations(db)                                             [throws on SQL failure]
+4.  runMigrations(db)                                             [throws on SQL failure]
       ├─ CREATE TABLE _schema_migrations IF NOT EXISTS
       ├─ SELECT applied filenames
       └─ For each unapplied .sql file (numeric sort):
          BEGIN; <SQL>; INSERT _schema_migrations; COMMIT
 
-6.  require payer-daemon socket on disk                           [fatal if missing]
-      payment.init({ socketPath, protoRoot })
-        ├─ loadSync proto files
-        ├─ open unix:<socket> gRPC client
-        └─ Health probe — must succeed
+5.  createLocClient(config)                                       [pure — does not network]
+      └─ best-effort loc.health() probe:
+         WARN-AND-CONTINUE on failure (a LOC outage must not stop boot;
+         /health reports the LOC as down until it recovers)
 
-7.  createRouteSelector(config)                                   [pure — does not dial]
-      └─ dial UDS, build resolver-backed selector
+6.  createRegistryCatalog(loc)                                    [pure — LOC-backed]
 
-8.  createEmailClient({ apiKey, fromEmail })                      [pure — does not network]
+7.  createEmailClient({ apiKey, baseUrl, fromEmail })             [pure — does not network]
       └─ if !apiKey: enabled=false; log warns; sends become log lines
 
-9.  createRateLimiter(config)                                     [pure]
-    rateLimiter.start()                                           [registers idle-evict interval]
+8.  createRateLimiter(config); rateLimiter.start()               [pure + idle-evict interval]
 
-10. buildServer({ config, db, pool, email, routeSelector, rateLimiter })
+9.  buildServer({ config, db, pool, email, loc, registryCatalog, rateLimiter })
       ├─ Fastify({ logger, trustProxy })
       ├─ register cors, cookie
       ├─ attachHttpMetrics (onRequest/onResponse hooks)
@@ -45,26 +42,28 @@ connections. Failure modes per step. Graceful shutdown contract.
       ├─ /admin/*  (X-Admin-Token gate)
       └─ /v1/* (Bearer + rate-limit preHandlers)
 
-11. startRegistryRefresh({…})                                     [non-blocking]
-      └─ kick off first refresh, schedule setInterval(intervalMs).unref()
+10. startRegistryRefresh({…})                                     [non-blocking]
+      └─ kick off first catalog refresh, schedule setInterval(intervalMs)
+
+11. startSettler({ db, loc, intervalMs, maxAttempts })            [non-blocking]
+      └─ schedule the durable settle-intent drain loop
 
 12. app.listen({ port, host })                                    [throws if port busy]
 ```
 
-The whole sequence takes < 1s in dev (the slow steps are the migration
-SQL and the optional payer Health probe, both ~50ms each).
+The whole sequence takes < 1s in dev. The slow step is the migration
+SQL; the LOC health probe is best-effort and bounded.
 
 ## Failure modes — per step
 
 | Step | If it fails | Recovery |
 |---|---|---|
-| 1 | Process exits with the validation message | Fix env, restart |
-| 5 | Process exits — migration is half-applied (rolled back by the tx) | Fix the SQL, restart. Migration runner is idempotent. |
-| 6 | Process exits | Operator fixes payer-daemon wiring, restarts |
-| 7 | Throws if proto load fails (bad proto root) | Fix `LIVEPEER_RESOLVER_PROTO_ROOT` |
-| 9 | (Pure — can't fail) | n/a |
-| 10 | Throws if a route registration is malformed (a code bug) | Fix code |
-| 11 | Logs and continues — refresh task survives one failure and tries again | Operator addresses registry-daemon issue; refresh recovers itself |
+| 1 | Process exits with the validation message | Fix env (e.g. missing `LOC_API_KEY`), restart |
+| 4 | Process exits — migration is half-applied (rolled back by the tx) | Fix the SQL, restart. Migration runner is idempotent. |
+| 5 | LOC probe failure is **non-fatal** — boot logs a warning and continues | Operator fixes LOC reachability / `LOC_API_KEY`; `/health` and `/v1/*` recover when the LOC does |
+| 9 | Throws if a route registration is malformed (a code bug) | Fix code |
+| 10 | Logs and continues — refresh task survives one failure and tries again | Operator addresses LOC catalog issue; refresh recovers itself |
+| 11 | Logs and continues — settler retries pending intents each tick | Operator addresses LOC reachability; refunds drain once it's back |
 | 12 | Process exits with EADDRINUSE | Free the port |
 
 ## Graceful shutdown
@@ -73,32 +72,37 @@ SQL and the optional payer Health probe, both ~50ms each).
 
 ```text
 1. log "shutting down"
-2. cancelRefresh()       — stop the registry refresh interval
-3. rateLimiter.stop()    — clear the evict interval
-4. payment.shutdown()    — close gRPC client (or no-op if never initialized)
-5. routeSelector.close?.() — close resolver gRPC client
-6. app.close()           — stop accepting + drain in-flight
-7. pool.end()            — close all Postgres connections
+2. cancelRefresh()           — stop the catalog refresh interval
+3. cancelSettler()           — stop the settle-intent drain loop
+4. rateLimiter.stop()        — clear the evict interval
+5. registryCatalog.close?.() — release any catalog resources
+6. app.close()               — stop accepting + drain in-flight
+7. pool.end()                — close all Postgres connections
 8. process.exit(0)
 ```
 
-In-flight `/v1/*` streams get terminated by step 6's drain. The
-client sees a half-finished SSE response. We accept this — see
-[`streaming-usage.md`](./streaming-usage.md): mid-stream errors are
-the streaming contract's known limitation.
+In-flight `/v1/*` streams get terminated by step 6's drain. The client
+sees a half-finished SSE response. We accept this — see
+[`streaming-usage.md`](./streaming-usage.md): mid-stream errors are the
+streaming contract's known limitation.
+
+A shutdown mid-request can leave a `settle_state='pending'` row whose
+settle never fired this process; the next process's settler picks it up.
+Pending intents are durable in Postgres, not in memory.
 
 ## Why this ordering
 
 - **Config first.** Anything else risks running with bad env.
-- **DB before everything else.** The migrations need to land before
-  any route handler can read its schema. A late migration means a
-  brief 500 window for early traffic — not acceptable.
-- **Payer + selector + email before listen.** They're prerequisites
-  for `/v1/*`. We want daemon wiring failures to stop boot rather
-  than degrade later at request time.
-- **Refresh task after listen would be fine.** It's scheduled
-  before listen for code simplicity (no awaitable promise to track)
-  — `setInterval(...).unref()` means it doesn't block exit.
+- **DB before everything else.** The migrations need to land before any
+  route handler can read its schema. A late migration means a brief 500
+  window for early traffic — not acceptable.
+- **LOC client is warn-and-continue.** The LOC is an external HTTP
+  dependency; an outage at boot must not crash the gateway. The SaaS
+  surfaces (`/portal/*`, `/admin/*`, public) still work off Postgres;
+  `/v1/*` errors and `/health` reports `loc: down` until it recovers.
+- **Background tasks before listen would be fine either way.** They're
+  scheduled before listen for code simplicity (no awaitable promise to
+  track).
 
 ## Where it lives
 
@@ -108,7 +112,8 @@ the streaming contract's known limitation.
 | Config validation | `gateway/src/config.ts` |
 | Migration runner | `gateway/src/db.ts` |
 | Fastify factory | `gateway/src/server.ts` |
-| Payer init / shutdown | `gateway/src/proxy/livepeer/payment.ts` |
-| Route selector lifecycle | `gateway/src/proxy/service/routeSelector.ts` |
+| LOC client (+ best-effort health probe) | `gateway/src/loc/client.ts` |
+| LOC-backed catalog | `gateway/src/registry/catalog.ts` |
 | Refresh task lifecycle | `gateway/src/registry/refresh.ts` |
+| Settler task lifecycle | `gateway/src/loc/settler.ts` |
 | Rate limiter lifecycle | `gateway/src/proxy/rateLimit.ts` |

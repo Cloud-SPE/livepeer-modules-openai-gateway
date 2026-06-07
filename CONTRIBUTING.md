@@ -36,9 +36,11 @@ You don't need a Resend account for local dev. When `RESEND_API_KEY` is
 unset, verification + API-key emails are logged to stdout instead of
 sent.
 
-For a fully working `/v1/*` stack, you do need valid Livepeer daemon
-configuration: chain RPC, registry address, and a keystore. This repo is
-on-chain only; there is no local fallback broker mode.
+For a fully working `/v1/*` stack, you do need a reachable LOC
+clearinghouse and a valid `LOC_API_KEY` whose account holds a credit
+balance. The LOC owns route selection and payment minting; this repo
+holds no chain keys and there is no local fallback broker mode. Use
+`make loc-smoke` to confirm the LOC is reachable.
 
 ---
 
@@ -97,12 +99,14 @@ plan — it's cheap.
 
 ## Things to leave alone
 
-- **`gateway/src/proxy/livepeer/`** and **`gateway/src/proxy/service/`**.
-  These are verbatim copies of load-bearing wire mechanics from the
-  upstream `livepeer-network-modules/openai-gateway` repo. They're
-  copied not because they're frozen, but because divergence is
-  expensive — every change makes future syncs harder. If you need to
-  change them, write an exec plan first and explain why.
+- **`gateway/src/proxy/livepeer/`**. This is a verbatim copy of
+  load-bearing wire mechanics (the http-reqresp / http-stream /
+  http-multipart broker dispatch + streaming-usage parsing) from the
+  upstream `livepeer-network-modules/openai-gateway` repo. It's copied
+  not because it's frozen, but because divergence is expensive — every
+  change makes future syncs harder. If you need to change it, write an
+  exec plan first and explain why. (The LOC client in
+  `gateway/src/loc/` is hand-written and not subject to this rule.)
 - **The Livepeer wire spec.** Owned by `livepeer-network-protocol`
   upstream, not here.
 

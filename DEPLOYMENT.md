@@ -12,9 +12,11 @@ This doc is for production.
 
 ## Topology
 
-A single-host or single-pod deployment of the three load-bearing
-services, with the gateway serving the checked-in site, portal, and
-admin SPAs itself:
+A single-host or single-pod deployment of just two services — the
+gateway and Postgres — with the gateway serving the checked-in site,
+portal, and admin SPAs itself. Route selection and payment minting are
+delegated to the external **LOC — Livepeer Open Clearinghouse** over
+HTTPS:
 
 ```
                 ┌────────────────────────────────────────┐
@@ -28,21 +30,23 @@ admin SPAs itself:
                 │gateway │               │gateway │
                 │  :4001 │               │ :4001  │
                 └───┬────┘               └────────┘
-        ┌───────────┼─────────────┐
-        │           │             │
-        ▼           ▼             ▼
-   ┌─────────┐ ┌─────────┐  ┌──────────┐
-   │ postgres│ │ payer-  │  │service-  │
-   │   :5432 │ │ daemon  │  │registry- │
-   └─────────┘ │  (UDS)  │  │ daemon   │
-               └────┬────┘  └────┬─────┘
-                    │            │
-                    ▼            ▼
-                  chain RPC  +  on-chain registry
+        ┌───────────┴───────────────┐
+        │                           │ HTTPS + X-API-Key
+        ▼                           ▼
+   ┌─────────┐              ┌─────────────────────┐
+   │ postgres│              │ LOC clearinghouse   │
+   │   :5432 │              │ (external)          │
+   └─────────┘              │  jobs + settle +    │
+                            │  capabilities       │
+                            └──────────┬──────────┘
+                                       ▼
+                            chain (route selection +
+                            pooled PM-ticket wallet)
 ```
 
-The gateway, postgres, and the two daemons share a `livepeer-run`
-volume for their UDS sockets. Daemons read the same EVM chain RPC.
+The compose stack is only `db` + `gateway` — no daemon sidecars, no
+unix-socket volumes, no chain keys on the host. The gateway reaches the
+LOC at `LOC_BASE_URL` with an `X-API-Key` header.
 
 ---
 
@@ -54,10 +58,10 @@ Before `docker compose up`:
       metrics host, or your equivalent).
 - [ ] TLS — Let's Encrypt or your CA of choice.
 - [ ] Postgres data volume backed by durable storage.
-- [ ] An EVM JSON-RPC endpoint (Arbitrum One default).
-- [ ] A funded Ethereum keystore for the payer-daemon (see
-      §"Keystore provisioning" below).
-- [ ] An `AI_SERVICE_REGISTRY_ADDRESS` for the chain you're on.
+- [ ] A reachable LOC clearinghouse and a valid `LOC_API_KEY` (see
+      §"LOC clearinghouse" below).
+- [ ] A funded LOC credit balance on that account (the LOC charges the
+      estimate at job issuance).
 - [ ] Resend account + API key (or commit to running without email
       and hand-delivering keys).
 - [ ] A copy of `.env.example` with every value filled.
@@ -79,6 +83,7 @@ non-negotiable secrets in production:
 | `METRICS_TOKEN` | Bearer token to fetch `/metrics`. Optional; deployer's choice between this and front-edge basic auth. | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Email delivery. Optional but strongly recommended. | from your Resend dashboard |
 | `RESEND_BASE_URL` | Override the Resend email API endpoint. Optional. | `https://api.resend.com/emails` |
+| `LOC_API_KEY` | Auth for the LOC clearinghouse (sent as `X-API-Key`). Required for `/v1/*`. | from the LOC portal |
 
 **Pepper rotation**: changing `API_KEY_HASH_PEPPER` invalidates every
 existing API key. Rotating peppers is currently a planned outage —
@@ -90,94 +95,73 @@ the compose stack.
 
 ---
 
-## Keystore provisioning (payer-daemon)
+## LOC clearinghouse
 
-The payer-daemon needs an Ethereum keystore + password to mint
-payment tickets. Without this, `/v1/*` returns 503.
+The gateway does **not** hold chain keys, mint tickets, or run any
+daemons. It delegates route selection and payment minting to the LOC
+(Livepeer Open Clearinghouse). Per `/v1/*` request the gateway:
 
-1. **Generate a fresh wallet** (or use an existing one):
+1. opens a job (`POST /v1/jobs {capability, offering, estimated_units}`);
+   the LOC selects a route, mints the payment envelope, and charges the
+   operator's credit balance the **full estimate** at issuance;
+2. forwards the request to the returned `broker_url` with the
+   `payment_envelope` in the `Livepeer-Payment` header;
+3. settles actual usage afterwards (`POST /v1/jobs/{id}/settle
+   {actual_units, outcome}`), and the LOC refunds the unused part.
 
-   ```bash
-   docker run --rm -v $(pwd)/.keystore:/keystore ethereum/client-go:stable \
-     account new --keystore /keystore
-   ```
+Settlement runs in a durable background task, so a missed settle only
+over-pays the estimate — it is never lost.
 
-   This produces `UTC--<timestamp>--<address>` in `.keystore/`.
-
-2. **Rename to `keystore.json`** for the daemon's expected path:
-
-   ```bash
-   mv .keystore/UTC--*--* .keystore/keystore.json
-   ```
-
-3. **Write the password file**:
-
-   ```bash
-   printf '%s' "your-keystore-password" > .keystore/keystore-password
-   chmod 600 .keystore/keystore-password
-   ```
-
-4. **Fund the wallet** with enough ETH (on Arbitrum One, ~$5 in ETH
-   for gas covers months of payment minting at low traffic). Use any
-   bridge or buy on a CEX → withdraw to Arbitrum.
-
-5. **Point compose at the directory**:
-
-   ```bash
-   LIVEPEER_KEYSTORE_DIR=/srv/openai-service/.keystore
-   ```
-
-   This path is mounted read-only into the payer-daemon container at
-   `/etc/livepeer/`.
-
-**Rotation**: replace the keystore + password files, restart the
-payer-daemon. Open tickets continue to settle against the old
-wallet's escrow until expiry; new tickets sign with the new key.
-
----
-
-## Chain RPC
-
-The two daemons each need an EVM JSON-RPC endpoint:
+### Config
 
 ```bash
-CHAIN_RPC=https://arb1.arbitrum.io/rpc   # public Arbitrum One
-# Or a paid endpoint for production load.
+LOC_BASE_URL=https://loc.cloudspe.com   # default
+LOC_API_KEY=…                           # required; sent as X-API-Key
+LOC_TIMEOUT_MS=30000
+LOC_SETTLE_INTERVAL_MS=15000            # background settler cadence
+LOC_SETTLE_MAX_ATTEMPTS=20              # per-job settle retries
+LOC_JOB_RETRIES=2                       # job-open retries on 429/5xx/mode-mismatch
 ```
 
-For production, **use a paid endpoint** (Alchemy, Infura, QuickNode,
-Ankr, …). Public endpoints rate-limit and won't carry sustained
-traffic. The resolver and payer daemons both use this same `CHAIN_RPC`
-value.
+### Funding
 
-**Chain ID** is wired separately in `.env` (default 42161 = Arbitrum
-One).
+Top up the LOC account's **credit balance** (wei-denominated) through
+the LOC portal. The LOC's pooled wallet signs the PM tickets; the
+gateway never touches a keystore or chain RPC. Watch the balance via
+`GET /admin/registry/loc` — if it runs dry, `POST /v1/jobs` fails and
+`/v1/*` errors.
+
+### Key rotation
+
+Rotate `LOC_API_KEY` in the LOC portal, update `.env`, restart the
+gateway. No on-host keystore to manage.
 
 ---
 
 ## Bringing the gateway online
 
-The default compose stack gets you most of the way; the `livepeer`
+The default compose stack (`db` + `gateway`) gets you all the way:
+
 ```bash
 # 1. clone + env
 git clone <repo>
 cd livepeer-modules-openai
 cp .env.example .env
-$EDITOR .env   # fill every required value
+$EDITOR .env   # fill every required value, incl. LOC_API_KEY
 
 # 2. build
 docker compose build gateway
 
-# 3. full stack (db + gateway + resolver + payer)
+# 3. full stack (db + gateway)
 docker compose up -d
 ```
 
-The compose defaults in this repo target `service-registry-daemon`
-and `payment-daemon` `v1.3.0`, which is the gateway-compatible line
-for the current branch. The daemon wiring is intentionally opinionated:
-one `CHAIN_RPC`, one `CHAIN_ID`, on-chain discovery only, unsigned
-registrations rejected, and no static overlays. If you override daemon
-tags, keep them on a `v1.3.x`-compatible contract surface.
+There are no daemon sidecars to run. The gateway talks to the external
+LOC over HTTPS; confirm reachability before serving users:
+
+```bash
+make loc-smoke   # opens a 1-unit job and settles 0 against the live LOC
+```
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.
@@ -201,13 +185,11 @@ Validate end-to-end against a real orchestrator:
    ```
 
    If you get `503 models_cache_unavailable` or
-   `503 models_cache_stale`, the registry-backed cache is not yet safe
-   to serve. Check `docker compose logs gateway` and
-   `docker compose logs service-registry-daemon`, then wait at least one
-   refresh cycle.
-   If you get `200` with `0`, the registry refresh hasn't found any
-   candidates. Check `docker compose logs service-registry-daemon` for
-   chain errors.
+   `503 models_cache_stale`, the LOC-backed cache is not yet safe to
+   serve. Check `docker compose logs gateway` and the LOC status via
+   `GET /admin/registry/loc`, then wait at least one refresh cycle.
+   If you get `200` with `0`, the catalog refresh hasn't found any
+   offerings. Check the gateway logs for LOC errors.
 
 3. **Pick a model**, hit `/v1/chat/completions` with `stream: false`:
 
@@ -219,46 +201,45 @@ Validate end-to-end against a real orchestrator:
    ```
 
    Expect a 200 with an OpenAI-shaped response. If you get a 502,
-   check `docker compose logs gateway` — the failover loop will have
-   logged each broker it tried.
+   check `docker compose logs gateway` — it logs the LOC job it opened
+   and the broker it forwarded to.
 
-4. **Confirm the reservation row settled**:
+4. **Confirm the reservation row committed and enqueued a settle**:
 
    ```bash
    docker compose exec db psql -U openai_service -c \
      "SELECT capability,
              model,
-             selected_capability,
-             selected_offering,
-             quote_id,
-             quote_version,
+             broker_url,
+             loc_job_id,
              state,
              estimated_work_units,
              committed_work_units,
+             settle_state,
+             settle_actual_units,
              latency_ms
       FROM usage_reservations ORDER BY created_at DESC LIMIT 5;"
    ```
 
    The latest row should be `state=committed` with a non-null
-   `committed_work_units`, a sensible `latency_ms`, and populated
-   `selected_capability` / `selected_offering` / `quote_id` fields.
+   `committed_work_units`, a populated `loc_job_id`, and `settle_state`
+   moving from `pending` to `settled` once the background settler runs.
 
-5. **Confirm the models cache has quote-aware inspection metadata**:
+5. **Confirm the models cache populated from the LOC catalog**:
 
    ```bash
    docker compose exec db psql -U openai_service -c \
      "SELECT model_id,
              capability,
-             quote_id,
-             quote_version,
-             units_per_price
+             interaction_mode,
+             active
       FROM models
       WHERE active = true
       ORDER BY snapshot_at DESC
       LIMIT 10;"
    ```
 
-   Expect non-empty rows after at most one registry refresh cycle.
+   Expect non-empty rows after at most one catalog refresh cycle.
 
 6. **Repeat with `stream: true`** to validate the SSE path.
 
@@ -380,38 +361,29 @@ For zero-downtime schema changes:
 3. Roll out follow-up migrations / cleanups after the new gateway is
    serving 100% of traffic.
 
-#### Upgrade note — daemon alignment (`f98ba48`)
+#### Upgrade note — LOC settlement (`0004_loc_settlement.sql`)
 
-The commit `f98ba48` (`Align gateway with v1.3.0 resolver and payer daemons`)
-requires two new gateway migrations:
+The move to the LOC clearinghouse adds one migration,
+`0004_loc_settlement.sql`, which is the operationally relevant one for
+upgrades from the daemon-era gateway. It adds nullable settle columns
+only, so the rollout is forward-compatible:
 
-- `0002_usage_reservation_route_metadata.sql`
-- `0003_models_quote_metadata.sql`
-
-They add nullable quote-aware diagnostic fields only, so the rollout is
-forward-compatible:
-
-- `usage_reservations` gains selected route / quote metadata
-  (`selected_capability`, `selected_offering`, `selected_work_unit`,
-  `units_per_price`, `quote_id`, `quote_version`,
-  `constraint_fingerprint_hex`, `route_fingerprint_hex`)
-- `models` gains cached inspection metadata
-  (`units_per_price`, `quote_id`, `quote_version`,
-  `constraint_fingerprint_hex`, `route_fingerprint_hex`)
+- `usage_reservations` gains `loc_job_id`, `settle_state`
+  (`NULL | pending | settled | failed`), `settle_actual_units`, and
+  `settle_outcome`, plus a partial index on `settle_state='pending'`
+  that the background settler drains.
 
 Operationally:
 
-1. Deploy the gateway image containing `f98ba48`.
-2. Let the boot-time migration runner apply both migrations.
-3. Confirm new `/v1/*` traffic starts populating the added reservation
-   fields.
-4. Confirm the background registry refresh starts populating the added
-   model-cache fields.
+1. Deploy the new gateway image.
+2. Let the boot-time migration runner apply `0004_loc_settlement.sql`.
+3. Confirm new `/v1/*` traffic populates `loc_job_id` and that
+   `settle_state` moves `pending → settled` as the settler runs.
 
-This commit also assumes `service-registry-daemon` and `payment-daemon`
-are already on the `v1.3.0`-compatible contract surface. The repo's
-current compose and `.env.example` defaults now point at `v1.3.0`
-directly.
+The earlier `0002`/`0003` migrations (route/quote diagnostic columns
+from the daemon era) remain applied; they are simply no longer written
+to. There are no daemon images to align — the gateway only needs a
+reachable LOC and a valid `LOC_API_KEY`.
 
 ---
 
@@ -467,17 +439,16 @@ Prometheus scrapes `/metrics`. Surfaces:
 - `openai_service_http_requests_total{method,route,status}`
 - `openai_service_http_request_duration_seconds`
 - `openai_service_proxy_reservations_total{capability,outcome}`
+- `openai_service_proxy_settle_total{outcome}`
 - `openai_service_waitlist_signups_total`
-- `livepeer_gateway_route_health_*` (from the inlined
-  gateway-route-health renderer)
 
 Recommended starter alerts:
 
 - 5xx rate above 1% sustained 5 min on `/v1/*`
 - `proxy_reservations_total{outcome="refunded"}` rising sharply
   vs `committed`
-- `livepeer_gateway_route_health_cooldowns_opened_total` rising —
-  brokers going unhealthy
+- `pendingSettlements` (from `/health`) climbing — the settler can't
+  reach the LOC; refunds are delayed
 - Event-loop lag > 100ms p95
 
 ---
@@ -526,10 +497,11 @@ undoes it (don't edit history).
 | Symptom | Likely cause | Where to look |
 |---|---|---|
 | `/health` shows `db: error` | Postgres down or wrong DATABASE_URL | `docker compose logs db` |
-| `/health` shows `payer: error` | Payer-daemon not running, or socket path mismatch | `docker compose logs payer-daemon` |
-| `/health` shows `registry: error` | Registry-daemon not running, or chain RPC unreachable | `docker compose logs service-registry-daemon` |
-| `/v1/models` returns empty `data: []` | No candidates from registry — either no orchestrators advertising, or registry-daemon hasn't synced yet | Logs of registry-daemon; wait one refresh cycle |
-| Every `/v1/*` returns 502 | All brokers failing, or payer-daemon can't mint | gateway logs (failover loop logs each candidate) |
+| `/health` shows `loc: error` (→ HTTP 503) | LOC unreachable, wrong `LOC_BASE_URL`, or invalid `LOC_API_KEY` | gateway logs; `GET /admin/registry/loc` |
+| `/v1/models` returns empty `data: []` | LOC advertises no offerings, or catalog refresh hasn't run yet | gateway logs; `GET /admin/registry/loc`; wait one refresh cycle |
+| Every `/v1/*` returns 503 | LOC unreachable or job-open failing | gateway logs (logs each opened job + retries) |
+| `/v1/*` errors with insufficient funds | LOC credit balance exhausted | `GET /admin/registry/loc` (balance); top up in the LOC portal |
+| `/health` `pendingSettlements` climbing | Settler can't reach the LOC; refunds delayed (not lost) | gateway logs; LOC reachability |
 | Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — search for `verification email send failed` |
 | Operator can't log into admin | ADMIN_TOKEN env var missing or mismatched | `docker compose exec gateway env | grep ADMIN_TOKEN` |
 | Sudden 503s after redeploy | Migration hung the gateway boot | gateway logs — last `[migrations]` line |

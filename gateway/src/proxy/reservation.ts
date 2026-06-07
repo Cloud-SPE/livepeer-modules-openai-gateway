@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerDeps } from '../server.js';
 import * as usageRepo from '../repo/usageReservations.js';
 import { proxyReservationsTotal } from '../metrics.js';
-import type { RouteCandidate } from './service/routeSelector.js';
+import type { RouteCandidate } from '../loc/dispatch.js';
 
 export interface OpenReservationInput {
   apiKeyId: string;
@@ -61,6 +61,9 @@ export async function openReservation(
 export interface CommitInput {
   workUnits: number | null;
   statusCode: number;
+  /** LOC job to settle with the observed units. The same DB write that
+   * commits the reservation enqueues the durable settle (settler.ts). */
+  locJobId?: string | null;
 }
 
 export async function commitReservation(
@@ -73,6 +76,7 @@ export async function commitReservation(
     committedWorkUnits: input.workUnits,
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
+    locJobId: input.locJobId ?? null,
   });
   proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'committed' });
 }
@@ -80,6 +84,8 @@ export async function commitReservation(
 export interface RefundInput {
   statusCode: number;
   errorText: string;
+  /** LOC job to settle with 0 units — full refund of the estimate. */
+  locJobId?: string | null;
 }
 
 export async function refundReservation(
@@ -92,6 +98,7 @@ export async function refundReservation(
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
     errorText: input.errorText,
+    locJobId: input.locJobId ?? null,
   });
   proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'refunded' });
 }

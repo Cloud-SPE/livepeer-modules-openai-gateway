@@ -11,7 +11,7 @@
 IMAGE ?= tztcloud/openai-service-gateway
 TAG   ?= dev
 
-.PHONY: help install build lint test dev down logs clean smoke web site-ui portal-ui admin-ui \
+.PHONY: help install build lint test dev down logs clean smoke loc-smoke web site-ui portal-ui admin-ui \
         docker-build docker-publish
 
 help:
@@ -25,6 +25,8 @@ help:
 	@echo "  make down        tear down dev compose stack"
 	@echo "  make logs        tail dev compose logs"
 	@echo "  make smoke       end-to-end smoke test against the dev stack"
+	@echo "  make loc-smoke   open + settle a 1-unit job against the live LOC"
+	@echo "                    (requires LOC_API_KEY; LOC_BASE_URL optional)"
 	@echo "  make web         start site + portal + admin dev servers"
 	@echo "  make site-ui     start the site dev server (:3000)"
 	@echo "  make portal-ui   start the portal dev server (:3001)"
@@ -60,6 +62,9 @@ logs:
 
 smoke:
 	./scripts/smoke.sh
+
+loc-smoke:
+	cd gateway && pnpm exec tsx ../scripts/loc-smoke.ts
 
 web:
 	@trap 'kill 0' INT TERM EXIT; \
