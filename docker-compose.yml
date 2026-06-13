@@ -34,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
-    image: openai-service-gateway:${GATEWAY_TAG:-dev}
+    image: openai-service-gateway:${GATEWAY_TAG:-v1.4.1}
     container_name: openai-service-gateway
     depends_on:
       db:

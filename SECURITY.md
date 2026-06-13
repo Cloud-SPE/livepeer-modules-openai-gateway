@@ -98,15 +98,16 @@ rate-limiting; that's a separate plan.
 - `ADMIN_TOKEN`
 - `API_KEY_HASH_PEPPER`
 - `IP_HASH_PEPPER`
+- `LOC_API_KEY` — authenticates the gateway to the Livepeer Open
+  Clearinghouse (route selection + payment minting); `/v1/*` cannot
+  function without it. Treat as a secret. Boot fails if unset.
 
 **Optional but strongly recommended**:
 
 - `METRICS_TOKEN` — Bearer-token gate on `/metrics`
 - `RESEND_API_KEY` — email delivery (unset → log instead of send)
 - `RESEND_BASE_URL` — override for the Resend email API endpoint
-- `LIVEPEER_RESOLVER_SOCKET` — registry-driven routing
-- `LIVEPEER_PAYER_DAEMON_SOCKET` — required for `/v1/*` to function
-  (unset → /v1/* returns 500)
+- `LOC_BASE_URL` — LOC endpoint (default `https://loc.cloudspe.com`)
 - `ALLOWED_ORIGINS` — comma-separated origin allowlist (default `*`)
 
 All secrets injected via env. No secrets in code, no secrets in
