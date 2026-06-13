@@ -23,7 +23,7 @@ Grading scale: **A** (load-bearing, well-tested, well-documented) →
 | Web — admin | `web/admin/` | C | Phase 5. Token in localStorage, waitlist queue + users + usage + registry-debug. Dev-server proxies `/api/*` + `/admin/*`. |
 | Compose stack | `docker-compose.yml` | C | Root compose ships `db` + `gateway` only — no daemon sidecars or proto/gRPC; route selection + payment minting are delegated to the external LOC. `make smoke` runs the full e2e flow. |
 | CI | `.github/workflows/` | C | Phase 0 scaffold; grows per phase. Runs `pnpm -r {lint,build,test}` + AGENTS.md link check on every push/PR. |
-| Tests | `gateway/test/` | C | 45 tests across `crypto.ts`, `proxy/chat.ts` helpers, `registry/refresh.ts` (`candidatesToModelRows`), and `proxy/rateLimit.ts`. Pure-function coverage; integration paths covered by `make smoke`. |
+| Tests | `gateway/test/` | C | 73 tests across the LOC client/resolve/dispatch/catalog/settler (`loc-*.test.ts`, 27), `chat-helpers.ts` (17), `crypto.ts` (12), `registry/refresh.ts` (11), and `rate-limit.ts` (6). Pure-function + LOC-contract coverage; integration paths covered by `make smoke`. |
 | OpenAPI | `/openapi.json` + `/docs`, `gateway/src/schema/api.ts` | C | OpenAPI 3.1 covers all 19 non-`/v1/*` routes via `@fastify/swagger` + `fastify-type-provider-zod`. zod schemas are the single source; handlers get typed `req.body`/`req.params`/`req.query` for free. Production: gate `/docs` + `/openapi.json` behind reverse-proxy auth. |
 
 ## Promotion criteria
