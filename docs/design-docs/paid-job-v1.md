@@ -190,10 +190,12 @@ These block release, but not the independent catalog/client/schema retrofit:
    `creation_round` and `expires_after_round` values with each minted envelope;
    chain expiry proves the envelope cannot create future liability. It does not
    prove that work was not delivered before expiry with settlement evidence
-   withheld. LOC persists the expiry, and the Modules working tree exposes
-   authoritative `current_round`, but the teams must reconcile automatic
-   release with LOC's newer fail-closed full-charge-or-evidence position.
-   Coordination: `lmoa-3bv.3`.
+   withheld. LOC persists the expiry, and Modules exposes authoritative
+   `current_round`. LOC has confirmed its safe fallback is a conservative full
+   charge after expiry unless Modules supplies signed non-admission evidence
+   independently retrievable by LOC, preferably using LOC's `request_id`.
+   There is no gateway abandon call or implementation change until that joint
+   contract is resolved. Coordination: `lmoa-3bv.3`.
 2. **Debit retry window.** The retry lifecycle is resolved, but its implemented
    timing is not the advertised “10 attempts over 30 minutes.” A 30-second
    sweep with a 10-attempt cap reaches terminal failure in roughly five

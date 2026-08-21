@@ -147,8 +147,10 @@ for the unresolved financial terminal states.
   gateway uses an independent durable lookup loop and deadline-aware alerts;
   the bounded LOC-settlement retry count does not apply before claim capture.
 - **2026-08-21 — no assertion-only abandon.** A never-admitted LOC reservation
-  can be released only after joint payer/payee evidence proves the issued
-  envelope is no longer spendable.
+  cannot be refunded merely because the envelope expired: expiry prevents
+  future spend but does not disprove earlier work. LOC's safe fallback is a
+  conservative full charge unless Modules provides signed non-admission
+  evidence that LOC can retrieve independently, preferably by `request_id`.
 - **2026-08-21 — settlement 409 preserves evidence.**
   `job_already_settled` is terminal financial success after a lost LOC
   response, but the original signed claim remains stored as the audit record.
@@ -160,8 +162,8 @@ for the unresolved financial terminal states.
   `lmoa-3bv.22` before pinning.
 - **2026-08-21 — chain expiry proves no future spend, not necessarily no prior
   work.** The payment daemon returns `creation_round` and
-  `expires_after_round`, and its current working tree exposes
-  `current_round`. LOC persists the deadline. Automatic refund remains open
+  `expires_after_round`, and exposes `current_round`. LOC persists the
+  deadline. Automatic refund remains open
   because an admitted customer could withhold settlement until expiry; the
   teams must choose independently retrievable evidence or a fail-closed
   terminal accounting policy.
