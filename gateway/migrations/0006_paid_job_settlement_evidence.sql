@@ -21,6 +21,8 @@ ALTER TABLE usage_reservations
     ADD COLUMN settlement_encoded           TEXT,
     ADD COLUMN settlement_envelope          JSONB,
     ADD COLUMN settlement_captured_at       TIMESTAMPTZ,
+    ADD COLUMN terminal_evidence_type        TEXT,
+    ADD COLUMN terminal_evidence_encoded     TEXT,
     ADD COLUMN broker_actual_units          NUMERIC(20, 0),
     ADD COLUMN broker_debited_units         NUMERIC(20, 0),
     ADD COLUMN broker_billed_value_wei      NUMERIC(78, 0),
@@ -52,6 +54,11 @@ ALTER TABLE usage_reservations
                 'not_admitted', 'no_record', 'evidence_expired', 'failed'
             )
         ),
+    ADD CONSTRAINT usage_reservations_terminal_evidence_type_check
+        CHECK (
+            terminal_evidence_type IS NULL
+            OR terminal_evidence_type IN ('not_admitted', 'evidence_expired', 'debit_failed')
+        ),
     ADD CONSTRAINT usage_reservations_broker_actual_units_check
         CHECK (broker_actual_units IS NULL OR broker_actual_units >= 0),
     ADD CONSTRAINT usage_reservations_broker_debited_units_check
@@ -60,3 +67,11 @@ ALTER TABLE usage_reservations
         CHECK (gateway_observed_units IS NULL OR gateway_observed_units >= 0),
     ADD CONSTRAINT usage_reservations_loc_settled_units_check
         CHECK (loc_settled_units IS NULL OR loc_settled_units >= 0);
+
+-- A v1 queue row has no signed claim and cannot be translated into a v2
+-- settlement. Keep it for audit, but fail it visibly instead of coercing its
+-- gateway observation into broker evidence.
+UPDATE usage_reservations
+SET settle_state = 'failed',
+    last_settle_error = 'legacy unsigned settlement requires manual reconciliation'
+WHERE settle_state = 'pending';

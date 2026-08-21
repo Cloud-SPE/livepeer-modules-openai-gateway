@@ -13,7 +13,7 @@ interface RecordedRequest {
 }
 
 async function withMockLoc(
-  respond: (req: RecordedRequest) => { status: number; body: unknown },
+  respond: (req: RecordedRequest) => { status: number; body?: unknown; rawBody?: string },
   fn: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>,
 ): Promise<void> {
   const requests: RecordedRequest[] = [];
@@ -28,9 +28,9 @@ async function withMockLoc(
         body: Buffer.concat(chunks).toString('utf8'),
       };
       requests.push(recorded);
-      const { status, body } = respond(recorded);
+      const { status, body, rawBody } = respond(recorded);
       res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(body));
+      res.end(rawBody ?? JSON.stringify(body));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -117,6 +117,38 @@ test('error envelope {error:{code,message}} maps to LocApiError', async () => {
   );
 });
 
+test('request_id_reuse remains a typed LOC refusal', async () => {
+  await withMockLoc(
+    () => ({
+      status: 409,
+      body: {
+        error: {
+          code: 'request_id_reuse',
+          message: 'idempotency key was already used with different content',
+        },
+      },
+    }),
+    async (baseUrl) => {
+      const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
+      await assert.rejects(
+        client.openJob({
+          idempotencyKey: 'same-key',
+          capability: 'different-capability',
+          offering: 'o',
+          transport: 'unary',
+          estimatedUnits: 1,
+        }),
+        (err: unknown) => {
+          assert.ok(err instanceof LocApiError);
+          assert.equal(err.status, 409);
+          assert.equal(err.code, 'request_id_reuse');
+          return true;
+        },
+      );
+    },
+  );
+});
+
 test('openJob rejects drift or missing identity in a successful LOC response', async () => {
   await withMockLoc(
     () => ({
@@ -194,14 +226,112 @@ test('settleJob hits the per-job settle path', async () => {
         refund_wei: 30,
         outcome: 'committed',
         closed_at: '2026-06-06T00:00:01Z',
+        cap_status: {
+          session_pct_used: 1,
+          spend_period_pct_used: 0.25,
+          user_balance_pct_used: null,
+          operator_pool_pct_used: null,
+          will_refuse_next_refill: false,
+          winddown_reason: null,
+        },
       },
     }),
     async (baseUrl, requests) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
-      const settled = await client.settleJob('job-9', { actualUnits: 7, outcome: 'committed' });
+      const settlement = {
+        payload: {
+          actual_units: '7',
+          job_id: 'broker-job-9',
+          work_id: 'work-9',
+          work_unit_name: 'tokens',
+          outcome: 'committed',
+        },
+        signature: {
+          algorithm: 'secp256k1' as const,
+          canonicalization: 'jcs' as const,
+          value: `0x${'ab'.repeat(65)}`,
+        },
+      };
+      const settled = await client.settleJob('job-9', {
+        actualUnits: 7,
+        brokerJobId: 'broker-job-9',
+        workUnit: 'tokens',
+        outcome: 'committed',
+        settlement,
+      });
       assert.equal(settled.refundWei, '30');
       assert.equal(requests[0]!.url, '/v1/jobs/job-9/settle');
-      assert.deepEqual(JSON.parse(requests[0]!.body), { actual_units: 7, outcome: 'committed' });
+      assert.deepEqual(JSON.parse(requests[0]!.body), {
+        actual_units: 7,
+        broker_job_id: 'broker-job-9',
+        work_unit: 'tokens',
+        outcome: 'committed',
+        settlement,
+      });
+    },
+  );
+});
+
+test('settleJob rejects unsigned or cross-job evidence before making a request', async () => {
+  await withMockLoc(
+    () => ({ status: 500, body: {} }),
+    async (baseUrl, requests) => {
+      const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
+      await assert.rejects(
+        client.settleJob('job-9', {
+          actualUnits: 7,
+          brokerJobId: 'broker-job-9',
+          workUnit: 'tokens',
+          settlement: {
+            payload: {
+              actual_units: '7',
+              job_id: 'different-job',
+              work_id: 'work-9',
+              work_unit_name: 'tokens',
+            },
+            signature: {
+              algorithm: 'secp256k1',
+              canonicalization: 'jcs',
+              value: `0x${'ab'.repeat(65)}`,
+            },
+          },
+        }),
+        (err: unknown) => {
+          assert.ok(err instanceof LocApiError);
+          assert.equal(err.code, 'loc_contract_invalid');
+          assert.match(err.message, /broker job identity drift/);
+          return true;
+        },
+      );
+      assert.equal(requests.length, 0);
+    },
+  );
+});
+
+test('large LOC wei integers are preserved without IEEE-754 rounding', async () => {
+  await withMockLoc(
+    () => ({
+      status: 201,
+      rawBody: '{"job_id":"job-large","request_id":"request-large",' +
+        '"work_id":"work-large","broker_url":"https://broker.example",' +
+        '"protocol":"paid-job/v1","transport":"unary","work_unit":"tokens",' +
+        '"payment_envelope":"payment",' +
+        '"expected_value_wei":123456789012345678901234567890,' +
+        '"funded_value_wei":123456789012345678901234567891,' +
+        '"settle_endpoint":"/v1/jobs/job-large/settle",' +
+        '"opened_at":"2026-08-21T00:00:00Z"}',
+    }),
+    async (baseUrl) => {
+      const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
+      const response = await client.openJob({
+        idempotencyKey: 'key-large',
+        capability: 'c',
+        offering: 'o',
+        transport: 'unary',
+        estimatedUnits: 1,
+      });
+      assert.equal(response.expectedValueWei, '123456789012345678901234567890');
+      assert.equal(response.fundedValueWei, '123456789012345678901234567891');
     },
   );
 });

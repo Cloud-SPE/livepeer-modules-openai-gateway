@@ -69,6 +69,14 @@ function fakeLoc(
         refundWei: '0',
         outcome: req.outcome ?? '',
         closedAt: '',
+        capStatus: {
+          sessionPctUsed: 0,
+          spendPeriodPctUsed: null,
+          userBalancePctUsed: null,
+          operatorPoolPctUsed: null,
+          willRefuseNextRefill: false,
+          winddownReason: null,
+        },
       };
     },
     async listCapabilities() {
@@ -253,4 +261,24 @@ test('LOC 5xx: retried up to maxJobAttempts', async () => {
     { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
     { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
   ]);
+});
+
+test('LOC timeout retries preserve the identical idempotency key and content', async () => {
+  const { loc, calls } = fakeLoc(
+    () => new LocApiError({ status: 0, code: 'loc_unreachable', message: 'timed out' }),
+  );
+  await assert.rejects(
+    dispatchReqresp({
+      loc,
+      capability: 'c',
+      offering: 'o',
+      estimatedUnits: 9,
+      requestId: 'stable-operation',
+      maxJobAttempts: 3,
+      body: null,
+    }),
+  );
+  assert.equal(calls.opens, 3);
+  assert.equal(new Set(calls.openRequests.map((request) => JSON.stringify(request))).size, 1);
+  assert.equal(calls.openRequests[0]!.idempotencyKey, 'stable-operation');
 });

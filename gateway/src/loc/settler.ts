@@ -2,19 +2,18 @@
 // reservation commit/refund (usage_reservations.settle_state='pending')
 // against LOC's POST /v1/jobs/{id}/settle.
 //
-// LOC charges the full estimate at job issuance; settling with actual
-// units refunds the difference. Missing a settle means permanently
-// over-paying the estimate, so this retries until LOC acks. 409
-// job_already_settled / 404 job_not_found are terminal successes —
-// double-settles are expected (dispatch fires best-effort inline
-// settles for retried jobs) and idempotent-safe.
+// LOC charges the full estimate at job issuance. Settlement requires
+// the original signed broker claim persisted by the lookup worker.
+// Transient failures retry without a finite abandonment ceiling. A 409
+// job_already_settled is success after a lost response; 404 is a
+// permanent reconciliation failure, never a successful settlement.
 
 import type { FastifyBaseLogger } from 'fastify';
 
 import type { Db } from '../db.js';
 import * as usageRepo from '../repo/usageReservations.js';
 import { proxySettleTotal } from '../metrics.js';
-import { LocApiError, type LocClient } from './client.js';
+import { LocApiError, type LocClient, type SettlementEnvelope } from './client.js';
 
 export interface StartSettlerInput {
   db: Db;
@@ -74,16 +73,16 @@ export interface SettlePassStats {
  * fakes in unit tests. */
 export interface SettleStore {
   claimPendingSettlements(limit: number): Promise<usageRepo.PendingSettlement[]>;
-  markSettled(id: string): Promise<void>;
-  recordSettleFailure(id: string, errorText: string, maxAttempts: number): Promise<void>;
+  markSettled(id: string, result: usageRepo.LocSettlementResult | null): Promise<void>;
+  recordSettleFailure(id: string, errorText: string, permanent: boolean): Promise<void>;
 }
 
 function dbStore(db: Db): SettleStore {
   return {
     claimPendingSettlements: (limit) => usageRepo.claimPendingSettlements(db, limit),
-    markSettled: (id) => usageRepo.markSettled(db, id),
-    recordSettleFailure: (id, errorText, maxAttempts) =>
-      usageRepo.recordSettleFailure(db, id, errorText, maxAttempts),
+    markSettled: (id, result) => usageRepo.markSettled(db, id, result),
+    recordSettleFailure: (id, errorText, permanent) =>
+      usageRepo.recordSettleFailure(db, id, errorText, permanent),
   };
 }
 
@@ -101,29 +100,34 @@ export async function runSettleOnce(
 
   for (const row of pending) {
     try {
-      await loc.settleJob(row.locJobId, {
-        actualUnits: row.settleActualUnits,
-        ...(row.settleOutcome ? { outcome: row.settleOutcome } : {}),
+      const result = await loc.settleJob(row.locJobId, {
+        actualUnits: row.actualUnits,
+        brokerJobId: row.brokerJobId,
+        workUnit: row.workUnit,
+        outcome: row.outcome,
+        settlement: row.settlement as unknown as SettlementEnvelope,
       });
-      await store.markSettled(row.id);
+      await store.markSettled(row.id, result);
       stats.settled += 1;
       proxySettleTotal.inc({ outcome: 'settled' });
     } catch (err) {
       if (isTerminalSettleAck(err)) {
-        // Already settled (or LOC dropped the job) — nothing left to claw back.
-        await store.markSettled(row.id);
+        await store.markSettled(row.id, null);
         stats.settled += 1;
         proxySettleTotal.inc({ outcome: 'already_settled' });
         continue;
       }
       const message = (err as Error).message ?? 'unknown settle error';
-      await store.recordSettleFailure(row.id, message, maxAttempts);
-      if (row.settleAttempts + 1 >= maxAttempts) {
+      const permanent = isPermanentSettleFailure(err);
+      await store.recordSettleFailure(row.id, message, permanent);
+      if (permanent) {
         stats.failed += 1;
         proxySettleTotal.inc({ outcome: 'failed' });
       } else {
         stats.retried += 1;
-        proxySettleTotal.inc({ outcome: 'retried' });
+        proxySettleTotal.inc({
+          outcome: row.settleAttempts + 1 >= maxAttempts ? 'retry_alert' : 'retried',
+        });
       }
     }
   }
@@ -133,10 +137,11 @@ export async function runSettleOnce(
 
 function isTerminalSettleAck(err: unknown): boolean {
   if (!(err instanceof LocApiError)) return false;
-  return (
-    err.code === 'job_already_settled' ||
-    err.code === 'job_not_found' ||
-    err.status === 409 ||
-    err.status === 404
-  );
+  return err.code === 'job_already_settled';
+}
+
+function isPermanentSettleFailure(err: unknown): boolean {
+  if (!(err instanceof LocApiError)) return false;
+  if (err.code === 'loc_contract_invalid') return true;
+  return err.status >= 400 && err.status < 500 && err.status !== 429;
 }

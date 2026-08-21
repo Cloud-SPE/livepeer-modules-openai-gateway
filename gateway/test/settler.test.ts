@@ -7,7 +7,7 @@ import type { PendingSettlement } from '../src/repo/usageReservations.js';
 
 interface StoreLog {
   settled: string[];
-  failures: Array<{ id: string; errorText: string }>;
+  failures: Array<{ id: string; errorText: string; permanent: boolean }>;
 }
 
 function fakeStore(rows: PendingSettlement[]): { store: SettleStore; log: StoreLog } {
@@ -19,8 +19,8 @@ function fakeStore(rows: PendingSettlement[]): { store: SettleStore; log: StoreL
     async markSettled(id) {
       log.settled.push(id);
     },
-    async recordSettleFailure(id, errorText) {
-      log.failures.push({ id, errorText });
+    async recordSettleFailure(id, errorText, permanent) {
+      log.failures.push({ id, errorText, permanent });
     },
   };
   return { store, log };
@@ -45,6 +45,14 @@ function fakeLoc(
         refundWei: '0',
         outcome: req.outcome ?? '',
         closedAt: '',
+        capStatus: {
+          sessionPctUsed: 0,
+          spendPeriodPctUsed: null,
+          userBalancePctUsed: null,
+          operatorPoolPctUsed: null,
+          willRefuseNextRefill: false,
+          winddownReason: null,
+        },
       };
     },
     async listCapabilities() {
@@ -67,8 +75,24 @@ function row(overrides: Partial<PendingSettlement> = {}): PendingSettlement {
   return {
     id: 'res-1',
     locJobId: 'job-1',
-    settleActualUnits: 5,
-    settleOutcome: 'committed',
+    brokerJobId: 'broker-job-1',
+    workUnit: 'tokens',
+    actualUnits: 5,
+    outcome: 'EXACT',
+    settlement: {
+      payload: {
+        actual_units: '5',
+        job_id: 'broker-job-1',
+        work_id: 'w',
+        work_unit_name: 'tokens',
+        outcome: 'EXACT',
+      },
+      signature: {
+        algorithm: 'secp256k1',
+        canonicalization: 'jcs',
+        value: `0x${'ab'.repeat(65)}`,
+      },
+    },
     settleAttempts: 0,
     ...overrides,
   };
@@ -82,7 +106,7 @@ test('successful settle marks the row settled with actual units', async () => {
   assert.deepEqual(log.settled, ['res-1']);
   assert.equal(settles[0]!.jobId, 'job-1');
   assert.equal(settles[0]!.req.actualUnits, 5);
-  assert.equal(settles[0]!.req.outcome, 'committed');
+  assert.equal(settles[0]!.req.outcome, 'EXACT');
 });
 
 test('409 job_already_settled is a terminal success', async () => {
@@ -96,14 +120,15 @@ test('409 job_already_settled is a terminal success', async () => {
   assert.equal(log.failures.length, 0);
 });
 
-test('404 job_not_found is a terminal success', async () => {
+test('404 job_not_found is a permanent reconciliation failure', async () => {
   const { store, log } = fakeStore([row()]);
   const { loc } = fakeLoc(() => {
     throw new LocApiError({ status: 404, code: 'job_not_found', message: 'gone' });
   });
   const stats = await runSettleOnce(store, loc, 20, 50);
-  assert.equal(stats.settled, 1);
-  assert.deepEqual(log.settled, ['res-1']);
+  assert.deepEqual(stats, { settled: 0, failed: 1, retried: 0 });
+  assert.deepEqual(log.settled, []);
+  assert.equal(log.failures[0]!.permanent, true);
 });
 
 test('transient failure records a retry', async () => {
@@ -116,16 +141,18 @@ test('transient failure records a retry', async () => {
   assert.equal(log.settled.length, 0);
   assert.equal(log.failures[0]!.id, 'res-1');
   assert.match(log.failures[0]!.errorText, /down/);
+  assert.equal(log.failures[0]!.permanent, false);
 });
 
-test('failure at maxAttempts counts as terminal failure', async () => {
+test('transient failure beyond alert threshold remains retryable', async () => {
   const { store, log } = fakeStore([row({ settleAttempts: 19 })]);
   const { loc } = fakeLoc(() => {
     throw new LocApiError({ status: 500, code: 'http_500', message: 'kaput' });
   });
   const stats = await runSettleOnce(store, loc, 20, 50);
-  assert.deepEqual(stats, { settled: 0, failed: 1, retried: 0 });
+  assert.deepEqual(stats, { settled: 0, failed: 0, retried: 1 });
   assert.equal(log.failures.length, 1);
+  assert.equal(log.failures[0]!.permanent, false);
 });
 
 test('mixed batch: each row classified independently', async () => {

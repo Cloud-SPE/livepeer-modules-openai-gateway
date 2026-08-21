@@ -78,6 +78,8 @@ export const usageReservations = pgTable(
     settlementEncoded: text('settlement_encoded'),
     settlementEnvelope: jsonb('settlement_envelope').$type<Record<string, unknown>>(),
     settlementCapturedAt: timestamp('settlement_captured_at', { withTimezone: true }),
+    terminalEvidenceType: text('terminal_evidence_type'),
+    terminalEvidenceEncoded: text('terminal_evidence_encoded'),
 
     // These are separate authorities, not interchangeable billing
     // estimates. Numeric strings retain the full uint64/uint256 range.
@@ -149,6 +151,10 @@ export const usageReservations = pgTable(
     lookupStateCheck: check(
       'usage_reservations_settlement_lookup_state_check',
       sql`${t.settlementLookupState} IS NULL OR ${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight', 'ready', 'not_admitted', 'no_record', 'evidence_expired', 'failed')`,
+    ),
+    terminalEvidenceTypeCheck: check(
+      'usage_reservations_terminal_evidence_type_check',
+      sql`${t.terminalEvidenceType} IS NULL OR ${t.terminalEvidenceType} IN ('not_admitted', 'evidence_expired', 'debit_failed')`,
     ),
   }),
 );

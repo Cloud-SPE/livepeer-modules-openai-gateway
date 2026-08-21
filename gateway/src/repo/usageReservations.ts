@@ -311,11 +311,36 @@ export async function recordSettlementEvidence(
         brokerDebitedUnits: evidence.debitedUnits,
         brokerBilledValueWei: evidence.billedValueWei,
         brokerSettlementOutcome: evidence.outcome,
+        terminalEvidenceType: evidence.outcome === 'DEBIT_FAILED' ? 'debit_failed' : null,
+        terminalEvidenceEncoded: evidence.outcome === 'DEBIT_FAILED' ? evidence.encoded : null,
+        settleState: evidence.outcome === 'DEBIT_FAILED' ? null : 'pending',
       })
       .where(eq(usageReservations.id, id));
     return [];
   });
   if (drift.length > 0) throw new SettlementEvidenceDriftError(drift);
+}
+
+export async function recordSettlementLookupTerminal(
+  db: Db,
+  id: string,
+  state: 'not_admitted' | 'evidence_expired' | 'failed',
+  detail: string,
+  encodedEvidence: string | null = null,
+): Promise<void> {
+  await db
+    .update(usageReservations)
+    .set({
+      settlementLookupState: state,
+      settlementLookupAttempts: sql`${usageReservations.settlementLookupAttempts} + 1`,
+      settlementLookupNextAt: null,
+      settlementLookupUpdatedAt: new Date(),
+      settlementLookupLastError: detail.slice(0, 500),
+      terminalEvidenceType:
+        state === 'not_admitted' ? 'not_admitted' : state === 'evidence_expired' ? 'evidence_expired' : null,
+      terminalEvidenceEncoded: encodedEvidence,
+    })
+    .where(eq(usageReservations.id, id));
 }
 
 export async function recordGatewayObservation(
@@ -387,8 +412,11 @@ export async function refund(db: Db, input: RefundInput): Promise<void> {
 export interface PendingSettlement {
   id: string;
   locJobId: string;
-  settleActualUnits: number;
-  settleOutcome: string | null;
+  brokerJobId: string;
+  workUnit: string;
+  actualUnits: number;
+  outcome: string;
+  settlement: Record<string, unknown>;
   settleAttempts: number;
 }
 
@@ -399,9 +427,18 @@ export async function claimPendingSettlements(
   limit: number,
 ): Promise<PendingSettlement[]> {
   const rows = await db.execute(sql`
-    SELECT id, loc_job_id, settle_actual_units, settle_outcome, settle_attempts
+    SELECT id, loc_job_id, broker_job_id, selected_work_unit,
+           broker_actual_units, broker_settlement_outcome,
+           settlement_envelope, settle_attempts
     FROM usage_reservations
-    WHERE settle_state = 'pending' AND loc_job_id IS NOT NULL
+    WHERE settle_state = 'pending'
+      AND settlement_lookup_state = 'ready'
+      AND loc_job_id IS NOT NULL
+      AND broker_job_id IS NOT NULL
+      AND selected_work_unit IS NOT NULL
+      AND broker_actual_units IS NOT NULL
+      AND broker_settlement_outcome IS NOT NULL
+      AND settlement_envelope IS NOT NULL
     ORDER BY resolved_at ASC NULLS LAST
     LIMIT ${limit}
     FOR UPDATE SKIP LOCKED
@@ -411,35 +448,80 @@ export async function claimPendingSettlements(
     return {
       id: String(r['id']),
       locJobId: String(r['loc_job_id']),
-      settleActualUnits: Number(r['settle_actual_units'] ?? 0),
-      settleOutcome: r['settle_outcome'] === null ? null : String(r['settle_outcome']),
-      settleAttempts: Number(r['settle_attempts'] ?? 0),
+      brokerJobId: requiredText(r, 'broker_job_id'),
+      workUnit: requiredText(r, 'selected_work_unit'),
+      actualUnits: safeIntegerFromDatabase(r['broker_actual_units'], 'broker_actual_units'),
+      outcome: requiredText(r, 'broker_settlement_outcome'),
+      settlement: requiredRecord(r, 'settlement_envelope'),
+      settleAttempts: requiredNonnegativeInteger(r, 'settle_attempts'),
     };
   });
 }
 
-export async function markSettled(db: Db, id: string): Promise<void> {
+export interface LocSettlementResult {
+  actualUnits: number;
+  billedValueWei: string;
+  outcome: string;
+}
+
+export async function markSettled(
+  db: Db,
+  id: string,
+  result: LocSettlementResult | null,
+): Promise<void> {
   await db
     .update(usageReservations)
-    .set({ settleState: 'settled', settledAt: new Date(), lastSettleError: null })
+    .set({
+      settleState: 'settled',
+      settledAt: new Date(),
+      lastSettleError: null,
+      ...(result
+        ? {
+            locSettledUnits: String(result.actualUnits),
+            locBilledValueWei: result.billedValueWei,
+            locSettlementOutcome: result.outcome,
+          }
+        : {}),
+    })
     .where(eq(usageReservations.id, id));
 }
 
-/** Record a settle failure; flips to terminal 'failed' at maxAttempts. */
+/** Record a settlement attempt. Transient failures remain pending without
+ * a retry ceiling; permanent evidence/contract failures stop for review. */
 export async function recordSettleFailure(
   db: Db,
   id: string,
   errorText: string,
-  maxAttempts: number,
+  permanent: boolean,
 ): Promise<void> {
   await db
     .update(usageReservations)
     .set({
       settleAttempts: sql`${usageReservations.settleAttempts} + 1`,
-      settleState: sql`CASE WHEN ${usageReservations.settleAttempts} + 1 >= ${maxAttempts} THEN 'failed' ELSE 'pending' END`,
+      settleState: permanent ? 'failed' : 'pending',
       lastSettleError: errorText.slice(0, 500),
     })
     .where(eq(usageReservations.id, id));
+}
+
+function safeIntegerFromDatabase(value: unknown, field: string): number {
+  const text = typeof value === 'string' ? value : typeof value === 'number' ? String(value) : '';
+  if (!/^(0|[1-9][0-9]*)$/.test(text)) {
+    throw new Error(`invalid ${field} in pending settlement row`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${field} exceeds the gateway safe integer range`);
+  }
+  return parsed;
+}
+
+function requiredRecord(row: Record<string, unknown>, field: string): Record<string, unknown> {
+  const value = row[field];
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`invalid ${field} in pending settlement row`);
+  }
+  return value as Record<string, unknown>;
 }
 
 /** Pending-settle backlog size, surfaced via /health and metrics. */
