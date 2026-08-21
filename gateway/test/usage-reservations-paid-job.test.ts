@@ -52,6 +52,7 @@ test('paid-job evidence migration is forward-only for historical rows', async ()
     'broker_job_id',
     'settlement_encoded',
     'settlement_envelope',
+    'terminal_evidence_encoded',
   ]) {
     assert.match(migration, new RegExp(`ADD COLUMN ${column}\\s+`));
     assert.doesNotMatch(migration, new RegExp(`ADD COLUMN ${column}[^,;]*NOT NULL`));

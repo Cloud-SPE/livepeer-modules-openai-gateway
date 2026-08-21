@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerDeps } from '../server.js';
 import * as usageRepo from '../repo/usageReservations.js';
 import { proxyReservationsTotal } from '../metrics.js';
-import type { RouteCandidate } from '../loc/dispatch.js';
+import type { JobRef, RouteCandidate } from '../loc/dispatch.js';
 
 export interface OpenReservationInput {
   apiKeyId: string;
@@ -61,9 +61,6 @@ export async function openReservation(
 export interface CommitInput {
   workUnits: number | null;
   statusCode: number;
-  /** LOC job to settle with the observed units. The same DB write that
-   * commits the reservation enqueues the durable settle (settler.ts). */
-  locJobId?: string | null;
 }
 
 export async function commitReservation(
@@ -76,7 +73,6 @@ export async function commitReservation(
     committedWorkUnits: input.workUnits,
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
-    locJobId: input.locJobId ?? null,
   });
   proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'committed' });
 }
@@ -84,8 +80,6 @@ export async function commitReservation(
 export interface RefundInput {
   statusCode: number;
   errorText: string;
-  /** LOC job to settle with 0 units — full refund of the estimate. */
-  locJobId?: string | null;
 }
 
 export async function refundReservation(
@@ -98,7 +92,6 @@ export async function refundReservation(
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
     errorText: input.errorText,
-    locJobId: input.locJobId ?? null,
   });
   proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'refunded' });
 }
@@ -121,6 +114,33 @@ export async function recordSelectedRoute(
     quoteVersion: String(candidate.quoteVersion ?? 0),
     constraintFingerprintHex: bytesToHex(candidate.constraintFingerprint),
     routeFingerprintHex: bytesToHex(candidate.routeFingerprint),
+  });
+}
+
+/** Dispatch calls this immediately after the idempotent LOC open and
+ * again once broker admission reveals Livepeer-Job-Id. */
+export async function recordPaidJob(
+  deps: ServerDeps,
+  handle: ReservationHandle,
+  job: JobRef,
+  candidate: RouteCandidate,
+): Promise<void> {
+  await usageRepo.recordPaidJobIdentity(deps.db, {
+    workId: handle.workId,
+    locIdempotencyKey: job.idempotencyKey,
+    locJobId: job.jobId,
+    locRequestId: job.requestId,
+    paymentWorkId: job.workId,
+    brokerJobId: job.brokerJobId || null,
+    protocol: job.protocol,
+    transport: job.transport,
+    workUnit: job.workUnit,
+    settleEndpoint: job.settleEndpoint,
+    brokerUrl: job.brokerUrl,
+    selectedCapability: job.capability,
+    selectedOffering: job.offering,
+    unitsPerPrice: candidate.unitsPerPrice || null,
+    pricePerWorkUnitWei: candidate.pricePerWorkUnitWei || null,
   });
 }
 

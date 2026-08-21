@@ -13,12 +13,13 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp, dispatchStream, jobRefFromError } from '../loc/dispatch.js';
+import { dispatchReqresp, dispatchStream } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
   openReservation,
+  recordPaidJob,
   recordSelectedRoute,
   refundReservation,
   type ReservationHandle,
@@ -104,14 +105,14 @@ export async function registerChatRoute(
           maxJobAttempts: deps.config.locJobRetries + 1,
           body: bodyStr,
           contentType: 'application/json',
-          requestId,
+          idempotencyKey: handle.workId,
+          onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         const usage = parseTotalTokens(dispatched.result.body);
         await commitReservation(deps, handle, {
           workUnits: usage,
           statusCode: dispatched.result.status,
-          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -124,7 +125,6 @@ export async function registerChatRoute(
         await refundReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
-          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
@@ -157,7 +157,8 @@ async function runStreaming(
       maxJobAttempts: deps.config.locJobRetries + 1,
       body: input.bodyStr,
       contentType: 'application/json',
-      requestId: input.requestId,
+      idempotencyKey: input.handle.workId,
+      onJobUpdate: (job, candidate) => recordPaidJob(deps, input.handle, job, candidate),
     });
   } catch (err) {
     const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
@@ -165,7 +166,6 @@ async function runStreaming(
     await refundReservation(deps, input.handle, {
       statusCode: brokerStatus(err),
       errorText: (err as Error).message ?? 'unknown',
-      locJobId: jobRefFromError(err)?.jobId ?? null,
     });
     handleBrokerError(reply, err, input.requestId);
     return;
@@ -208,7 +208,6 @@ async function runStreaming(
     await refundReservation(deps, input.handle, {
       statusCode: dispatched.result.status,
       errorText: (streamErr as Error).message ?? 'stream_error',
-      locJobId: dispatched.jobRef.jobId,
     });
     return;
   }
@@ -217,7 +216,6 @@ async function runStreaming(
   await commitReservation(deps, input.handle, {
     workUnits: usage,
     statusCode: dispatched.result.status,
-    locJobId: dispatched.jobRef.jobId,
   });
 }
 

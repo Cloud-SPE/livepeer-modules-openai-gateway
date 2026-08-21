@@ -37,6 +37,7 @@ export interface RouteCandidate {
 
 /** Handle for settling the LOC job once actual units are known. */
 export interface JobRef {
+  idempotencyKey: string;
   jobId: string;
   brokerJobId: string;
   requestId: string;
@@ -45,6 +46,9 @@ export interface JobRef {
   transport: JobTransport;
   workUnit: string;
   settleEndpoint: string;
+  brokerUrl: string;
+  capability: string;
+  offering: string;
 }
 
 export interface DispatchSuccess<T> {
@@ -58,9 +62,11 @@ interface DispatchCommon {
   capability: string;
   offering: string;
   estimatedUnits: number;
-  requestId: string;
+  idempotencyKey: string;
   /** Total job-open attempts (default 3 = 1 + 2 retries). */
   maxJobAttempts?: number;
+  /** Called durably after LOC open and again after broker admission. */
+  onJobUpdate?: (job: JobRef, candidate: RouteCandidate) => Promise<void>;
 }
 
 interface ReqRespDispatch extends DispatchCommon {
@@ -123,12 +129,10 @@ export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSucc
 }
 
 // ── core loop ───────────────────────────────────────────────────────
-// Per attempt: open a fresh job → verify the LOC granted the desired
-// interaction mode → send to the returned broker. Failed attempts get
-// a best-effort inline settle(0) so the estimate's charge is refunded;
-// the FINAL failed job's ref is attached to the thrown error so the
-// handler can persist a durable settle(0) (at-least-once; LOC's 409
-// job_already_settled makes the overlap idempotent-safe).
+// Retry the same idempotent LOC open until it converges, persist the
+// returned identities, then send exactly once to the selected broker.
+// Broker failures never manufacture a zero-unit settlement; the
+// durable lookup worker retrieves the signed terminal outcome.
 
 async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
   opts: DispatchCommon,
@@ -141,7 +145,7 @@ async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
   for (let attempt = 0; attempt < maxAttempts && !job; attempt++) {
     try {
       job = await opts.loc.openJob({
-        idempotencyKey: opts.requestId,
+        idempotencyKey: opts.idempotencyKey,
         capability: opts.capability,
         offering: opts.offering,
         transport,
@@ -154,16 +158,23 @@ async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
   }
   if (!job) throw lastError ?? new Error(`LOC open failed for ${opts.capability}/${opts.offering}`);
 
+  const candidate = candidateFromJob(job, opts.capability, opts.offering);
+  await opts.onJobUpdate?.(jobRef(job, opts, ''), candidate);
+
+  let admittedJobId = '';
   try {
     const result = await send(job);
     validateBrokerMetadata(result, job);
+    admittedJobId = result.jobId!;
+    const ref = jobRef(job, opts, admittedJobId);
+    await opts.onJobUpdate?.(ref, candidate);
     return {
-      candidate: candidateFromJob(job, opts.capability, opts.offering),
+      candidate,
       result,
-      jobRef: jobRef(job, result.jobId!),
+      jobRef: ref,
     };
   } catch (err) {
-    attachJobContext(err, job, opts.capability, opts.offering);
+    attachJobContext(err, job, opts, admittedJobId);
     throw err;
   }
 }
@@ -203,19 +214,20 @@ function shouldRetryJobOpen(err: unknown): boolean {
 function attachJobContext(
   err: unknown,
   job: OpenJobResponse,
-  capability: string,
-  offering: string,
+  opts: DispatchCommon,
+  brokerJobId: string,
 ): void {
   if (err && typeof err === 'object') {
     Object.assign(err, {
-      jobRef: jobRef(job),
-      routeCandidate: candidateFromJob(job, capability, offering),
+      jobRef: jobRef(job, opts, brokerJobId),
+      routeCandidate: candidateFromJob(job, opts.capability, opts.offering),
     });
   }
 }
 
-function jobRef(job: OpenJobResponse, brokerJobId = ''): JobRef {
+function jobRef(job: OpenJobResponse, opts: DispatchCommon, brokerJobId: string): JobRef {
   return {
+    idempotencyKey: opts.idempotencyKey,
     jobId: job.jobId,
     brokerJobId,
     requestId: job.requestId,
@@ -224,6 +236,9 @@ function jobRef(job: OpenJobResponse, brokerJobId = ''): JobRef {
     transport: job.transport,
     workUnit: job.workUnit,
     settleEndpoint: job.settleEndpoint,
+    brokerUrl: job.brokerUrl,
+    capability: opts.capability,
+    offering: opts.offering,
   };
 }
 

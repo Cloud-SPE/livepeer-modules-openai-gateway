@@ -120,13 +120,14 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
       capability: 'openai:chat-completions',
       offering: 'llama-3',
       estimatedUnits: 10,
-      requestId: 'req-1',
+      idempotencyKey: 'req-1',
       body: '{}',
       contentType: 'application/json',
     });
     assert.equal(calls.opens, 1);
     assert.equal(calls.settles.length, 0);
     assert.deepEqual(out.jobRef, {
+      idempotencyKey: 'req-1',
       jobId: 'job-1',
       brokerJobId: 'broker-job-1',
       requestId: 'broker-request-1',
@@ -135,6 +136,9 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
       transport: 'unary',
       workUnit: 'tokens',
       settleEndpoint: '/v1/jobs/job-1/settle',
+      brokerUrl,
+      capability: 'openai:chat-completions',
+      offering: 'llama-3',
     });
     assert.equal(out.candidate.brokerUrl, brokerUrl);
     assert.equal(out.candidate.model, 'llama-3');
@@ -148,6 +152,23 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
   });
 });
 
+test('persists LOC identity before send and broker identity after admission', async () => {
+  await withMockBroker(200, async (brokerUrl) => {
+    const { loc } = fakeLoc(() => job(brokerUrl, 1));
+    const updates: string[] = [];
+    await dispatchReqresp({
+      loc,
+      capability: 'c',
+      offering: 'o',
+      estimatedUnits: 1,
+      idempotencyKey: 'request-1',
+      body: null,
+      onJobUpdate: async (ref) => { updates.push(ref.brokerJobId); },
+    });
+    assert.deepEqual(updates, ['', 'broker-job-1']);
+  });
+});
+
 test('broker 5xx does not create or compensate a fresh LOC job', async () => {
   await withMockBroker(500, async (brokerUrl) => {
     const { loc, calls } = fakeLoc((n) => job(brokerUrl, n));
@@ -157,7 +178,7 @@ test('broker 5xx does not create or compensate a fresh LOC job', async () => {
         capability: 'c',
         offering: 'o',
         estimatedUnits: 1,
-        requestId: 'r',
+        idempotencyKey: 'r',
         maxJobAttempts: 3,
         body: null,
       }),
@@ -182,7 +203,7 @@ test('broker 4xx: fails immediately without retry', async () => {
         capability: 'c',
         offering: 'o',
         estimatedUnits: 1,
-        requestId: 'r',
+        idempotencyKey: 'r',
         body: null,
       }),
       (err: unknown) => {
@@ -204,7 +225,7 @@ test('broker idempotency refusal is exposed as a typed outcome', async () => {
         capability: 'c',
         offering: 'o',
         estimatedUnits: 1,
-        requestId: 'r',
+        idempotencyKey: 'r',
         body: null,
       }),
       (err: unknown) => {
@@ -227,7 +248,7 @@ test('LOC 402 insufficient_credit: throws immediately, no retry', async () => {
       capability: 'c',
       offering: 'o',
       estimatedUnits: 1,
-      requestId: 'r',
+      idempotencyKey: 'r',
       body: null,
     }),
     (err: unknown) => {
@@ -250,7 +271,7 @@ test('LOC 5xx: retried up to maxJobAttempts', async () => {
       capability: 'c',
       offering: 'o',
       estimatedUnits: 1,
-      requestId: 'r',
+      idempotencyKey: 'r',
       maxJobAttempts: 3,
       body: null,
     }),
@@ -273,7 +294,7 @@ test('LOC timeout retries preserve the identical idempotency key and content', a
       capability: 'c',
       offering: 'o',
       estimatedUnits: 9,
-      requestId: 'stable-operation',
+      idempotencyKey: 'stable-operation',
       maxJobAttempts: 3,
       body: null,
     }),

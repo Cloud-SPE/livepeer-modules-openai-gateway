@@ -27,8 +27,6 @@ export interface CommitInput {
   committedWorkUnits: number | null;
   latencyMs: number;
   statusCode: number;
-  /** LOC job to settle with the committed units (durable enqueue). */
-  locJobId?: string | null;
 }
 
 export async function commit(db: Db, input: CommitInput): Promise<void> {
@@ -40,25 +38,8 @@ export async function commit(db: Db, input: CommitInput): Promise<void> {
       latencyMs: input.latencyMs,
       statusCode: input.statusCode,
       resolvedAt: new Date(),
-      ...settleEnqueue(input.locJobId, input.committedWorkUnits ?? 0, 'committed'),
     })
     .where(eq(usageReservations.workId, input.workId));
-}
-
-/** Settle-intent columns written alongside commit/refund. One DB write
- * doubles as the durable settle queue entry (see loc/settler.ts). */
-function settleEnqueue(
-  locJobId: string | null | undefined,
-  actualUnits: number,
-  outcome: string,
-): Partial<typeof usageReservations.$inferInsert> {
-  if (!locJobId) return {};
-  return {
-    locJobId,
-    settleState: 'pending',
-    settleActualUnits: Math.max(0, Math.floor(actualUnits)),
-    settleOutcome: outcome,
-  };
 }
 
 export interface RouteMetadataUpdate {
@@ -109,6 +90,11 @@ export interface PaidJobIdentityInput {
   transport: 'unary' | 'stream' | 'multipart';
   workUnit: string;
   settleEndpoint: string;
+  brokerUrl: string;
+  selectedCapability: string;
+  selectedOffering: string;
+  unitsPerPrice: number | null;
+  pricePerWorkUnitWei: string | null;
 }
 
 /** Persist every paid-job identity before asynchronous recovery starts. */
@@ -128,6 +114,11 @@ export async function recordPaidJobIdentity(
       jobTransport: input.transport,
       selectedWorkUnit: input.workUnit,
       settleEndpoint: input.settleEndpoint,
+      brokerUrl: input.brokerUrl,
+      selectedCapability: input.selectedCapability,
+      selectedOffering: input.selectedOffering,
+      unitsPerPrice: input.unitsPerPrice,
+      pricePerWorkUnitWei: input.pricePerWorkUnitWei,
       settlementLookupState: 'pending',
       settlementLookupNextAt: new Date(),
       settlementLookupUpdatedAt: new Date(),
@@ -300,9 +291,12 @@ export async function recordSettlementEvidence(
     await tx
       .update(usageReservations)
       .set({
-        settlementLookupState: 'ready',
+        settlementLookupState: evidence.outcome === 'DEBIT_FAILED' ? 'failed' : 'ready',
         settlementLookupUpdatedAt: new Date(),
-        settlementLookupLastError: null,
+        settlementLookupLastError:
+          evidence.outcome === 'DEBIT_FAILED'
+            ? 'signed DEBIT_FAILED: broker delivery completed without terminal debit'
+            : null,
         brokerJobId: evidence.brokerJobId,
         settlementEncoded: evidence.encoded,
         settlementEnvelope: evidence.envelope,
@@ -389,8 +383,6 @@ export interface RefundInput {
   latencyMs: number;
   statusCode: number;
   errorText: string;
-  /** LOC job to settle with 0 units (full refund of the estimate). */
-  locJobId?: string | null;
 }
 
 export async function refund(db: Db, input: RefundInput): Promise<void> {
@@ -402,7 +394,6 @@ export async function refund(db: Db, input: RefundInput): Promise<void> {
       statusCode: input.statusCode,
       errorText: input.errorText,
       resolvedAt: new Date(),
-      ...settleEnqueue(input.locJobId, 0, 'refunded'),
     })
     .where(eq(usageReservations.workId, input.workId));
 }

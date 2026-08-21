@@ -9,13 +9,14 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchMultipart, jobRefFromError } from '../loc/dispatch.js';
+import { dispatchMultipart } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
 import { extractMultipartField } from './service/multipart.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
   openReservation,
+  recordPaidJob,
   recordSelectedRoute,
   refundReservation,
 } from './reservation.js';
@@ -101,13 +102,13 @@ export async function registerAudioTranscriptionsRoute(
           maxJobAttempts: deps.config.locJobRetries + 1,
           body,
           contentType,
-          requestId,
+          idempotencyKey: handle.workId,
+          onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         await commitReservation(deps, handle, {
           workUnits: 1,
           statusCode: dispatched.result.status,
-          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -123,7 +124,6 @@ export async function registerAudioTranscriptionsRoute(
         await refundReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
-          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
