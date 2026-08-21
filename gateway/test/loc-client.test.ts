@@ -172,7 +172,13 @@ test('listCapabilities flattens snake_case payload', async () => {
             name: 'openai:chat-completions',
             work_unit: 'tokens',
             offerings: [
-              { id: 'llama-3', price_per_work_unit_wei: '100', work_unit: 'tokens' },
+              {
+                id: 'llama-3',
+                price_per_work_unit_wei: '100',
+                work_unit: 'tokens',
+                protocol: 'paid-job/v1',
+                job: { transports: ['unary', 'stream'] },
+              },
             ],
           },
         ],
@@ -185,6 +191,8 @@ test('listCapabilities flattens snake_case payload', async () => {
       assert.equal(caps[0]!.name, 'openai:chat-completions');
       assert.equal(caps[0]!.offerings[0]!.id, 'llama-3');
       assert.equal(caps[0]!.offerings[0]!.pricePerWorkUnitWei, '100');
+      assert.equal(caps[0]!.offerings[0]!.protocol, 'paid-job/v1');
+      assert.deepEqual(caps[0]!.offerings[0]!.transports, ['unary', 'stream']);
     },
   );
 });

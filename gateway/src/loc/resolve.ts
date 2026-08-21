@@ -3,10 +3,8 @@
 // Users may request either the friendly model id (extra.openai.model,
 // what /v1/models advertises) or a raw offering id. The LOC job wants
 // the offering id; the runner wants its serving name in the JSON body.
-// This helper maps between the three, preferring an offering whose
-// advertised interaction mode matches what the route needs (so
-// `stream:true` lands on a `-stream` offering without a mode-mismatch
-// retry).
+// This helper maps the LOC offering id to the runner-facing model and
+// verifies that the same offering declares the requested transport.
 //
 // Resolution is best-effort: when the catalog is unreachable or the
 // LOC predates extra exposure, it falls back to the operator's
@@ -15,6 +13,7 @@
 
 import type { RegistryCatalog, RouteCandidate } from '../registry/catalog.js';
 import { inferModel } from '../registry/catalog.js';
+import type { JobTransport } from './client.js';
 
 export interface ResolvedRoute {
   /** Offering id to open the LOC job with. */
@@ -29,7 +28,7 @@ export interface ResolveInput {
   modelMap: Record<string, string>;
   capability: string;
   requestedModel: string;
-  interactionMode?: string;
+  transport: JobTransport;
 }
 
 export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> {
@@ -44,12 +43,9 @@ export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> 
   const matches = candidates.filter(
     (c) =>
       c.capability === input.capability &&
-      (c.offering === input.requestedModel || c.model === input.requestedModel),
+      c.offering === input.requestedModel,
   );
-  const pick =
-    (input.interactionMode
-      ? matches.find((c) => c.interactionMode === input.interactionMode)
-      : undefined) ?? matches[0];
+  const pick = matches.find((c) => c.transports.includes(input.transport));
 
   const offering = pick?.offering ?? input.requestedModel;
   const runnerModel =

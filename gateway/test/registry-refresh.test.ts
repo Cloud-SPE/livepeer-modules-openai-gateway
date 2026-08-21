@@ -10,7 +10,8 @@ function candidate(overrides: Partial<RouteCandidate> = {}): RouteCandidate {
     capability: 'openai:chat-completions',
     offering: 'fallback-offering',
     model: 'qwen3:8b',
-    interactionMode: 'http-reqresp@v0',
+    protocol: 'paid-job/v1',
+    transports: ['unary'],
     ethAddress: '0xabc',
     pricePerWorkUnitWei: '0',
     workUnit: 'total_tokens',
@@ -28,9 +29,9 @@ function candidate(overrides: Partial<RouteCandidate> = {}): RouteCandidate {
 describe('candidatesToModelRows', () => {
   it('produces one row per unique modelId', () => {
     const rows = candidatesToModelRows([
-      candidate({ model: 'a' }),
-      candidate({ model: 'b' }),
-      candidate({ model: 'c' }),
+      candidate({ offering: 'a' }),
+      candidate({ offering: 'b' }),
+      candidate({ offering: 'c' }),
     ]);
     assert.equal(rows.length, 3);
     assert.deepEqual(
@@ -39,16 +40,16 @@ describe('candidatesToModelRows', () => {
     );
   });
 
-  it('de-dupes by modelId (last candidate wins)', () => {
+  it('de-dupes by offering id (last candidate wins)', () => {
     const rows = candidatesToModelRows([
-      candidate({ model: 'a', brokerUrl: 'http://broker1' }),
-      candidate({ model: 'a', brokerUrl: 'http://broker2' }),
+      candidate({ offering: 'a', brokerUrl: 'http://broker1' }),
+      candidate({ offering: 'a', brokerUrl: 'http://broker2' }),
     ]);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.brokerUrl, 'http://broker2');
   });
 
-  it('falls back to offering when model is null', () => {
+  it('uses offering id even when runner model differs', () => {
     const rows = candidatesToModelRows([
       candidate({ model: null, offering: 'offering-id' }),
     ]);
@@ -56,11 +57,11 @@ describe('candidatesToModelRows', () => {
     assert.equal(rows[0]!.modelId, 'offering-id');
   });
 
-  it('skips candidates with no derivable modelId', () => {
+  it('skips candidates with an empty offering id', () => {
     const rows = candidatesToModelRows([
       candidate({ model: null, offering: '' }),
       candidate({ model: '   ', offering: '' }),
-      candidate({ model: 'real' }),
+      candidate({ offering: 'real' }),
     ]);
     assert.equal(rows.length, 1);
     assert.equal(rows[0]!.modelId, 'real');
@@ -105,19 +106,20 @@ describe('candidatesToModelRows', () => {
     assert.equal(rows[0]!.category, null);
   });
 
-  it('preserves capability / interactionMode / ethAddress / price / brokerUrl', () => {
+  it('preserves capability / protocol / transports / ethAddress / price / brokerUrl', () => {
     const rows = candidatesToModelRows([
       candidate({
         model: 'm',
         capability: 'openai:embeddings',
-        interactionMode: 'http-reqresp@v0',
+        transports: ['unary', 'stream'],
         ethAddress: '0xface',
         pricePerWorkUnitWei: '1000',
         brokerUrl: 'http://b',
       }),
     ]);
     assert.equal(rows[0]!.capability, 'openai:embeddings');
-    assert.equal(rows[0]!.interactionMode, 'http-reqresp@v0');
+    assert.equal(rows[0]!.protocol, 'paid-job/v1');
+    assert.deepEqual(rows[0]!.transports, ['unary', 'stream']);
     assert.equal(rows[0]!.ethAddress, '0xface');
     assert.equal(rows[0]!.pricePerWorkUnitWei, '1000');
     assert.equal(rows[0]!.brokerUrl, 'http://b');

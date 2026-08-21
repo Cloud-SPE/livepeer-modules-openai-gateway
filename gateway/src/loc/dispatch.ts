@@ -24,7 +24,8 @@ export interface RouteCandidate {
   capability: string;
   offering: string;
   model: string | null;
-  interactionMode: string | null;
+  protocol: string;
+  transports: Array<'unary' | 'stream' | 'multipart'>;
   ethAddress: string;
   pricePerWorkUnitWei: string;
   workUnit: string;
@@ -195,7 +196,8 @@ function candidateFromJob(
     capability,
     offering,
     model: offering,
-    interactionMode: mode,
+    protocol: 'paid-job/v1',
+    transports: [transportForLegacyMode(mode)],
     ethAddress: '',
     pricePerWorkUnitWei: '',
     workUnit: '',
@@ -207,6 +209,12 @@ function candidateFromJob(
     extra: null,
     constraints: null,
   };
+}
+
+function transportForLegacyMode(mode: string): 'unary' | 'stream' | 'multipart' {
+  if (mode === STREAM_MODE) return 'stream';
+  if (mode === MULTIPART_MODE) return 'multipart';
+  return 'unary';
 }
 
 /** Inline refund for jobs we are about to abandon mid-loop. Best-effort:

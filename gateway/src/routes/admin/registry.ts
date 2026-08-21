@@ -35,7 +35,8 @@ const LocStatusResponse = z
 const ModelRow = z.object({
   modelId: z.string(),
   capability: z.string(),
-  interactionMode: z.string().nullable(),
+  protocol: z.string(),
+  transports: z.array(z.string()),
   name: z.string().nullable(),
   description: z.string().nullable(),
   provider: z.string().nullable(),
@@ -87,7 +88,8 @@ const AdminModelHealthRow = z.object({
   reason: z.string().nullable(),
   routeCount: z.number(),
   offerings: z.array(z.string()),
-  interactionModes: z.array(z.string()),
+  protocol: z.string(),
+  transports: z.array(z.string()),
   snapshotAt: Timestamp,
 });
 
@@ -199,7 +201,8 @@ export async function registerAdminRegistryRoutes(
           capability: c.capability,
           offering: c.offering,
           model: c.model,
-          interactionMode: c.interactionMode,
+          protocol: c.protocol,
+          transports: c.transports,
           ethAddress: c.ethAddress,
           pricePerWorkUnitWei: c.pricePerWorkUnitWei,
           workUnit: c.workUnit,
@@ -266,7 +269,8 @@ export async function registerAdminRegistryRoutes(
         data: rows.map((r) => ({
           modelId: r.modelId,
           capability: r.capability,
-          interactionMode: r.interactionMode,
+          protocol: r.protocol,
+          transports: r.transports,
           name: r.name,
           description: r.description,
           provider: r.provider,

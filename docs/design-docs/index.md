@@ -18,6 +18,7 @@ Component-local design lives under each component's own directory
 | [`payment-flow.md`](./payment-flow.md) | 🟡 | LOC job lifecycle: open (route + payment envelope) → forward → durable settle. Charge-at-issuance, failure modes. |
 | [`route-selector.md`](./route-selector.md) | 🟡 | Selection lives in the LOC (one route per job). The gateway's only routing logic is the mode-mismatch retry; what was dropped and why. |
 | [`streaming-usage.md`](./streaming-usage.md) | 🟡 | Stream-options injection, transcript accumulation while piping, last-frame-wins parser, settle-vs-refund decision tree. |
+| [`paid-job-v1.md`](./paid-job-v1.md) | 🟡 | Binding Modules 2.0 migration contract: transport negotiation, layered idempotency, signed settlement authority, replay, and distinct usage signals. |
 | [`boot-sequence.md`](./boot-sequence.md) | 🟡 | Order of operations from `index.ts` entry (config → migrations → LOC probe → catalog → server → refresh + settler), failure modes, shutdown. |
 
 Most of v1 sits at 🟡 — the code is real and matches the docs, but

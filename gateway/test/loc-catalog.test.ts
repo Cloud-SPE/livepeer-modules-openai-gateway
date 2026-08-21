@@ -9,14 +9,14 @@ test('flattenCapabilities maps offerings to RouteCandidates', () => {
       name: 'openai:chat-completions',
       workUnit: 'tokens',
       offerings: [
-        { id: 'llama-3', pricePerWorkUnitWei: '100', workUnit: 'tokens', extra: {} },
-        { id: 'qwen-2', pricePerWorkUnitWei: null, workUnit: null, extra: {} },
+        { id: 'llama-3', pricePerWorkUnitWei: '100', workUnit: 'tokens', protocol: 'paid-job/v1', transports: ['unary', 'stream'], extra: {} },
+        { id: 'qwen-2', pricePerWorkUnitWei: null, workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} },
       ],
     },
     {
       name: 'openai:embeddings',
       workUnit: 'tokens',
-      offerings: [{ id: 'bge-m3', pricePerWorkUnitWei: '5', workUnit: 'tokens', extra: {} }],
+      offerings: [{ id: 'bge-m3', pricePerWorkUnitWei: '5', workUnit: 'tokens', protocol: 'paid-job/v1', transports: ['unary'], extra: {} }],
     },
   ]);
 
@@ -41,7 +41,7 @@ test('flattenCapabilities maps offerings to RouteCandidates', () => {
   assert.equal(llama.constraintFingerprint.length, 0);
 });
 
-test('flattenCapabilities derives model and mode from extra metadata', () => {
+test('flattenCapabilities derives runner model and preserves protocol transports', () => {
   const candidates = flattenCapabilities([
     {
       name: 'openai:chat-completions',
@@ -51,18 +51,10 @@ test('flattenCapabilities derives model and mode from extra metadata', () => {
           id: 'vllm-qwen3.6-27b-default',
           pricePerWorkUnitWei: '100',
           workUnit: 'tokens',
+          protocol: 'paid-job/v1',
+          transports: ['unary', 'stream'],
           extra: {
-            interaction_mode: 'http-reqresp@v0',
             openai: { model: 'Qwen3.6-27B', name: 'Qwen 3.6 27B' },
-          },
-        },
-        {
-          id: 'vllm-qwen3.6-27b-stream',
-          pricePerWorkUnitWei: '100',
-          workUnit: 'tokens',
-          extra: {
-            interaction_mode: 'http-stream@v0',
-            openai: { model: 'Qwen3.6-27B' },
           },
         },
       ],
@@ -70,9 +62,8 @@ test('flattenCapabilities derives model and mode from extra metadata', () => {
   ]);
 
   assert.equal(candidates[0]!.model, 'Qwen3.6-27B');
-  assert.equal(candidates[0]!.interactionMode, 'http-reqresp@v0');
-  assert.equal(candidates[1]!.model, 'Qwen3.6-27B');
-  assert.equal(candidates[1]!.interactionMode, 'http-stream@v0');
+  assert.equal(candidates[0]!.protocol, 'paid-job/v1');
+  assert.deepEqual(candidates[0]!.transports, ['unary', 'stream']);
   // extra is preserved on the candidate for downstream consumers.
   assert.deepEqual(
     (candidates[0]!.extra as { openai: { name: string } }).openai.name,
@@ -82,8 +73,17 @@ test('flattenCapabilities derives model and mode from extra metadata', () => {
 
 test('flattenCapabilities drops empty names and offering ids', () => {
   const candidates = flattenCapabilities([
-    { name: '', workUnit: null, offerings: [{ id: 'x', pricePerWorkUnitWei: '1', workUnit: null, extra: {} }] },
-    { name: 'rerank', workUnit: 'requests', offerings: [{ id: '', pricePerWorkUnitWei: '1', workUnit: null, extra: {} }] },
+    { name: '', workUnit: null, offerings: [{ id: 'x', pricePerWorkUnitWei: '1', workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} }] },
+    { name: 'rerank', workUnit: 'requests', offerings: [{ id: '', pricePerWorkUnitWei: '1', workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} }] },
   ]);
   assert.equal(candidates.length, 0);
+});
+
+test('flattenCapabilities rejects unknown protocol and missing transports', () => {
+  assert.throws(() => flattenCapabilities([{ name: 'chat', workUnit: 'tokens', offerings: [
+    { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-session/v1', transports: [], extra: {} },
+  ] }]), /unsupported protocol/);
+  assert.throws(() => flattenCapabilities([{ name: 'chat', workUnit: 'tokens', offerings: [
+    { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-job\/v1', transports: [], extra: {} },
+  ] }]), /missing job transports/);
 });

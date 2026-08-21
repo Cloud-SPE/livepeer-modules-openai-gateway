@@ -26,7 +26,7 @@ export class LocApiError extends Error {
   }
 }
 
-export type LocMode = 'http-reqresp@v0' | 'http-stream@v0' | 'http-multipart@v0';
+export type JobTransport = 'unary' | 'stream' | 'multipart';
 
 export interface OpenJobRequest {
   capability: string;
@@ -68,8 +68,10 @@ export interface LocOffering {
   id: string;
   pricePerWorkUnitWei: string | null;
   workUnit: string | null;
+  protocol: string;
+  transports: JobTransport[];
   /** Merged node+capability extra_json registry metadata (opaque JSON
-   * object; e.g. extra.openai.model, extra.interaction_mode). Empty
+   * object; e.g. extra.openai.model. Empty
    * object when the LOC predates the extra-exposure change. */
   extra: Record<string, unknown>;
 }
@@ -193,10 +195,13 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
           workUnit: strOrNull(cap['work_unit']),
           offerings: offerings.map((o) => {
             const off = asRecord(o);
+            const job = asRecord(off['job']);
             return {
               id: str(off['id']),
               pricePerWorkUnitWei: strOrNull(off['price_per_work_unit_wei']),
               workUnit: strOrNull(off['work_unit']),
+              protocol: str(off['protocol']),
+              transports: parseJobTransports(job['transports']),
               extra: asRecord(off['extra']),
             };
           }),
@@ -236,6 +241,14 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
       };
     },
   };
+}
+
+function parseJobTransports(value: unknown): JobTransport[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  if (value.some((item) => item !== 'unary' && item !== 'stream' && item !== 'multipart')) {
+    throw new Error('LOC capability contains an unsupported paid-job transport');
+  }
+  return value as JobTransport[];
 }
 
 // ── error envelope parsing ──────────────────────────────────────────

@@ -22,7 +22,8 @@ export const models = pgTable(
   {
     modelId: text('model_id').primaryKey(),
     capability: text('capability').notNull(),
-    interactionMode: text('interaction_mode'),
+    protocol: text('protocol').notNull(),
+    transports: jsonb('transports').$type<string[]>().notNull(),
 
     // Display fields — pulled from registry extras when present, nullable
     // otherwise. Operators MAY override via UPDATE; the refresh task

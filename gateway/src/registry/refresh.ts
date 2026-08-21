@@ -77,7 +77,8 @@ export async function upsertModelsFromSnapshot(
           target: models.modelId,
           set: {
             capability: sql`excluded.capability`,
-            interactionMode: sql`excluded.interaction_mode`,
+            protocol: sql`excluded.protocol`,
+            transports: sql`excluded.transports`,
             ethAddress: sql`excluded.eth_address`,
             pricePerWorkUnitWei: sql`excluded.price_per_work_unit_wei`,
             brokerUrl: sql`excluded.broker_url`,
@@ -127,7 +128,7 @@ export async function upsertModelsFromSnapshot(
 export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] {
   const rowsByModelId = new Map<string, NewModel>();
   for (const c of candidates) {
-    const modelId = (c.model ?? c.offering ?? '').trim();
+    const modelId = c.offering.trim();
     if (!modelId) continue;
     const extraObj =
       c.extra && typeof c.extra === 'object' && !Array.isArray(c.extra)
@@ -140,7 +141,8 @@ export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] 
     rowsByModelId.set(modelId, {
       modelId,
       capability: c.capability,
-      interactionMode: c.interactionMode,
+      protocol: c.protocol,
+      transports: c.transports,
       name: pickString(openai, 'name') ?? pickString(extraObj, 'name'),
       description:
         pickString(openai, 'description') ?? pickString(extraObj, 'description'),

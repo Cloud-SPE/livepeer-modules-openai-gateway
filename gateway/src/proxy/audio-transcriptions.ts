@@ -89,6 +89,7 @@ export async function registerAudioTranscriptionsRoute(
         modelMap: deps.config.locModelMap,
         capability,
         requestedModel,
+        transport: 'multipart',
       });
 
       try {

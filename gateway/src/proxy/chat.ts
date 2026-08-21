@@ -12,8 +12,6 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
-import { MODE as REQRESP_MODE } from './livepeer/http-reqresp.js';
-import { MODE as STREAM_MODE } from './livepeer/http-stream.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
 import { dispatchReqresp, dispatchStream, jobRefFromError } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
@@ -69,17 +67,14 @@ export async function registerChatRoute(
         estimatedWorkUnits: estimatedChatWorkUnits(body),
       });
 
-      // Users request either the friendly model id (extra.openai.model)
-      // or a raw offering id. Resolve to the offering for the LOC job
-      // and the runner-facing serving name for the upstream body,
-      // preferring an offering whose advertised mode matches stream vs
-      // unary.
+      // The OpenAI model id is the LOC offering id. Resolve only the
+      // runner-facing serving name and verify the declared transport.
       const { offering, runnerModel } = await resolveRoute({
         catalog: deps.registryCatalog,
         modelMap: deps.config.locModelMap,
         capability,
         requestedModel,
-        interactionMode: isStream ? STREAM_MODE : REQRESP_MODE,
+        transport: isStream ? 'stream' : 'unary',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;

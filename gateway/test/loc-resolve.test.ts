@@ -10,7 +10,8 @@ function candidate(overrides: Partial<RouteCandidate>): RouteCandidate {
     capability: 'openai:chat-completions',
     offering: 'offering-id',
     model: null,
-    interactionMode: null,
+    protocol: 'paid-job/v1',
+    transports: ['unary'],
     ethAddress: '',
     pricePerWorkUnitWei: '0',
     workUnit: 'tokens',
@@ -29,40 +30,34 @@ function catalogOf(candidates: RouteCandidate[]): RegistryCatalog {
   return { inspect: async () => candidates };
 }
 
-const QWEN_DEFAULT = candidate({
-  offering: 'vllm-qwen3.6-27b-default',
+const QWEN = candidate({
+  offering: 'vllm-qwen3.6-27b',
   model: 'Qwen3.6-27B',
-  interactionMode: 'http-reqresp@v0',
-  extra: { interaction_mode: 'http-reqresp@v0', openai: { model: 'Qwen3.6-27B' } },
+  transports: ['unary', 'stream'],
+  extra: { openai: { model: 'Qwen3.6-27B' } },
 });
 
-const QWEN_STREAM = candidate({
-  offering: 'vllm-qwen3.6-27b-stream',
-  model: 'Qwen3.6-27B',
-  interactionMode: 'http-stream@v0',
-  extra: { interaction_mode: 'http-stream@v0', openai: { model: 'Qwen3.6-27B' } },
-});
-
-test('friendly model id resolves to mode-matching offering + runner name', async () => {
+test('offering id resolves for a declared transport and runner name', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT, QWEN_STREAM]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:chat-completions',
-    requestedModel: 'Qwen3.6-27B',
-    interactionMode: 'http-stream@v0',
+    requestedModel: 'vllm-qwen3.6-27b',
+    transport: 'stream',
   });
-  assert.equal(resolved.offering, 'vllm-qwen3.6-27b-stream');
+  assert.equal(resolved.offering, 'vllm-qwen3.6-27b');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');
 });
 
 test('offering id resolves to runner name from extra', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT, QWEN_STREAM]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:chat-completions',
-    requestedModel: 'vllm-qwen3.6-27b-default',
+    requestedModel: 'vllm-qwen3.6-27b',
+    transport: 'unary',
   });
-  assert.equal(resolved.offering, 'vllm-qwen3.6-27b-default');
+  assert.equal(resolved.offering, 'vllm-qwen3.6-27b');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');
 });
 
@@ -73,6 +68,7 @@ test('no extra metadata: falls back to operator model map', async () => {
     modelMap: { 'legacy-offering': 'Mapped/Name' },
     capability: 'openai:chat-completions',
     requestedModel: 'legacy-offering',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'legacy-offering');
   assert.equal(resolved.runnerModel, 'Mapped/Name');
@@ -80,10 +76,11 @@ test('no extra metadata: falls back to operator model map', async () => {
 
 test('unknown model passes through unchanged (LOC will 404 the job)', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:chat-completions',
     requestedModel: 'no-such-model',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'no-such-model');
   assert.equal(resolved.runnerModel, 'no-such-model');
@@ -100,6 +97,7 @@ test('catalog failure degrades to map/identity', async () => {
     modelMap: { 'an-offering': 'Runner/Name' },
     capability: 'openai:chat-completions',
     requestedModel: 'an-offering',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'an-offering');
   assert.equal(resolved.runnerModel, 'Runner/Name');
@@ -107,10 +105,11 @@ test('catalog failure degrades to map/identity', async () => {
 
 test('capability mismatch is not resolved across capabilities', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:embeddings',
     requestedModel: 'Qwen3.6-27B',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'Qwen3.6-27B');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');

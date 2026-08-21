@@ -60,6 +60,7 @@ export async function registerAudioSpeechRoute(
         modelMap: deps.config.locModelMap,
         capability,
         requestedModel,
+        transport: 'unary',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;

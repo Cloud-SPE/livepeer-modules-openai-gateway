@@ -13,7 +13,8 @@ export interface ActiveModelHealth {
   reason: string | null;
   routeCount: number;
   offerings: string[];
-  interactionModes: string[];
+  protocol: string;
+  transports: string[];
   extra: Record<string, unknown> | null;
   snapshotAt: Date;
 }
@@ -42,11 +43,8 @@ export async function loadActiveModelHealth(
       reason: matches.length > 0 ? null : 'no_routes',
       routeCount: matches.length,
       offerings: uniq(matches.map((candidate) => candidate.offering)),
-      interactionModes: uniq(
-        matches
-          .map((candidate) => candidate.interactionMode)
-          .filter((mode): mode is string => typeof mode === 'string' && mode.length > 0),
-      ),
+      protocol: row.protocol,
+      transports: uniq(matches.flatMap((candidate) => candidate.transports)),
       extra: isJsonObject(row.extraJson) ? row.extraJson : null,
       snapshotAt: row.snapshotAt,
     };

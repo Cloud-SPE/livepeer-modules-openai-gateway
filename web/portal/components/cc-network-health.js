@@ -63,15 +63,15 @@ class CcNetworkHealth extends LitElement {
       </div>
 
       <div class="card">
-        <h2>Models ${helpTip('Interaction modes show how a route is served: req/resp for unary calls, stream for streaming, multipart for file uploads.')}</h2>
+        <h2>Models ${helpTip('Transports show whether an offering serves unary, streaming, or multipart requests.')}</h2>
         <div class="health-model-list" role="list" aria-label="Model availability">
           ${sortedModels.map((model) => html`
             <article class="health-model-row" role="listitem">
               <div class="health-model-copy">
                 <h3>${model.id}</h3>
                 <p>${displayCapability(model.category)}</p>
-                ${model.interactionModes?.length
-                  ? html`<p class="msg compact">${describeModes(model.interactionModes)} · ${model.routeCount} route${model.routeCount === 1 ? '' : 's'}</p>`
+                ${model.transports?.length
+                  ? html`<p class="msg compact">${model.transports.join(', ')} · ${model.routeCount} route${model.routeCount === 1 ? '' : 's'}</p>`
                   : ''}
               </div>
               <span class="health-badge health-badge-${model.selectable ? 'up' : 'down'}">
@@ -87,15 +87,6 @@ class CcNetworkHealth extends LitElement {
 
 function helpTip(text) {
   return html`<span class="help-tip" tabindex="0" title=${text} aria-label=${text}>?</span>`;
-}
-
-function describeModes(modes) {
-  const labels = modes.map((mode) => {
-    if (mode === 'http-stream@v0') return 'stream';
-    if (mode === 'http-reqresp@v0') return 'req/resp';
-    return mode;
-  });
-  return labels.join(', ');
 }
 
 function summarizeCapabilities(models) {
