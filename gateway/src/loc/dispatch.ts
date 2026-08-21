@@ -135,7 +135,12 @@ export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSucc
 // Broker failures never manufacture a zero-unit settlement; the
 // durable lookup worker retrieves the signed terminal outcome.
 
-async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
+async function attemptJob<T extends {
+  jobId?: string;
+  workUnit?: string;
+  body?: unknown;
+  headers?: Headers | Record<string, string | string[] | undefined>;
+}>(
   opts: DispatchCommon,
   transport: JobTransport,
   send: (job: OpenJobResponse) => Promise<T>,
@@ -172,6 +177,13 @@ async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
     admittedJobId = result.jobId!;
     const ref = jobRef(job, opts, admittedJobId);
     await opts.onJobUpdate?.(ref, candidate);
+    if (isAccountingReplay(result, transport)) {
+      throw new LivepeerBrokerError({
+        status: 502,
+        code: 'upstream_response_lost',
+        message: 'The original upstream response was lost; accounting recovered without re-execution.',
+      });
+    }
     return {
       candidate,
       result,
@@ -181,6 +193,41 @@ async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
     attachJobContext(err, job, opts, admittedJobId);
     throw err;
   }
+}
+
+export function isAccountingReplay(
+  result: { body?: unknown; headers?: Headers | Record<string, string | string[] | undefined> },
+  transport: JobTransport,
+): boolean {
+  if (transport === 'stream') {
+    const headers = result.headers;
+    const contentType =
+      headers instanceof Headers
+        ? headers.get('content-type')
+        : headers
+          ? firstHeader(headers, 'content-type')
+          : undefined;
+    return !contentType?.toLowerCase().startsWith('text/event-stream');
+  }
+  const body = result.body;
+  if (typeof body !== 'string' && !(body instanceof ArrayBuffer) && !ArrayBuffer.isView(body)) {
+    return false;
+  }
+  try {
+    const text = typeof body === 'string' ? body : new TextDecoder().decode(body as ArrayBufferView);
+    const parsed = JSON.parse(text) as { replayed?: unknown };
+    return parsed.replayed === true;
+  } catch {
+    return false;
+  }
+}
+
+function firstHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const value = headers[name];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function candidateFromJob(

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { dispatchReqresp, jobRefFromError } from '../src/loc/dispatch.js';
+import { dispatchReqresp, isAccountingReplay, jobRefFromError } from '../src/loc/dispatch.js';
 import { LocApiError, type LocClient, type OpenJobRequest, type OpenJobResponse, type SettleJobRequest } from '../src/loc/client.js';
 import { LivepeerBrokerError } from '../src/proxy/livepeer/errors.js';
 
@@ -15,6 +15,7 @@ interface BrokerRequest {
 async function withMockBroker(
   status: number | ((call: number) => number),
   fn: (brokerUrl: string, requests: BrokerRequest[]) => Promise<void>,
+  successBody: unknown = { ok: true },
 ): Promise<void> {
   const requests: BrokerRequest[] = [];
   const server: Server = createServer((req, res) => {
@@ -29,7 +30,7 @@ async function withMockBroker(
         'Livepeer-Work-Units': code >= 400 ? '0' : '1',
         ...(code === 409 ? { 'Livepeer-Error': 'job_in_flight' } : {}),
       });
-      res.end(JSON.stringify(code >= 400 ? { message: 'boom' } : { ok: true }));
+      res.end(JSON.stringify(code >= 400 ? { message: 'boom' } : successBody));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -167,6 +168,56 @@ test('persists LOC identity before send and broker identity after admission', as
     });
     assert.deepEqual(updates, ['', 'broker-job-1']);
   });
+});
+
+test('accounting-only replay marker is not treated as an OpenAI response', () => {
+  const body = new TextEncoder().encode('{"replayed":true,"job_id":"broker-job-1"}');
+  assert.equal(isAccountingReplay({ body, headers: new Headers() }, 'unary'), true);
+  assert.equal(
+    isAccountingReplay(
+      { headers: { 'content-type': 'application/json' } },
+      'stream',
+    ),
+    true,
+  );
+  assert.equal(
+    isAccountingReplay(
+      { headers: { 'content-type': 'text/event-stream; charset=utf-8' } },
+      'stream',
+    ),
+    false,
+  );
+});
+
+test('accounting-only replay schedules the original job and fails without resubmission', async () => {
+  await withMockBroker(
+    200,
+    async (brokerUrl, brokerRequests) => {
+      const { loc, calls } = fakeLoc(() => job(brokerUrl, 1));
+      const updates: string[] = [];
+      await assert.rejects(
+        dispatchReqresp({
+          loc,
+          capability: 'c',
+          offering: 'o',
+          estimatedUnits: 1,
+          idempotencyKey: 'operation-1',
+          body: '{}',
+          onJobUpdate: async (ref) => { updates.push(ref.brokerJobId); },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof LivepeerBrokerError);
+          assert.equal(error.code, 'upstream_response_lost');
+          assert.equal(jobRefFromError(error)?.brokerJobId, 'broker-job-1');
+          return true;
+        },
+      );
+      assert.equal(calls.opens, 1);
+      assert.equal(brokerRequests.length, 1);
+      assert.deepEqual(updates, ['', 'broker-job-1']);
+    },
+    { replayed: true, job_id: 'broker-job-1' },
+  );
 });
 
 test('broker 5xx does not create or compensate a fresh LOC job', async () => {
