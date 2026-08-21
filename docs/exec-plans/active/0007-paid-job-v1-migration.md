@@ -170,9 +170,14 @@ for the unresolved financial terminal states.
   `lmoa-3bv.22` before pinning.
 - **2026-08-21 — LOC must recover settlement without caller cooperation.** A
   caller can withhold `Livepeer-Job-Id`, so job-id-only lookup cannot protect
-  reconciliation. Modules must expose the admitted job's durable signed
-  settlement by LOC's stable `request_id`; LOC verifies the signed binding and
-  joint conformance covers restart retention and all accounting states.
+  reconciliation. Modules `3999acc` exposes the admitted job's durable outcome
+  as `GET /v1/exchange/{request_id}`. LOC still must integrate it, verify the
+  signed binding, and prove restart retention and all accounting states in
+  joint conformance.
+- **2026-08-21 — customer-known identity cannot authorize deletion.** Any
+  broker record-deletion acknowledgement must authenticate LOC independently
+  of `request_id`; otherwise the customer could erase evidence before LOC
+  reconciles it.
 - **2026-08-21 — transcription duration extractor accepted.** Use Modules'
   `multipart-audio-duration`; keep inexact headerless MP3 estimation disabled
   unless the product deliberately opts into estimated billing.

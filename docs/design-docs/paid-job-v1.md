@@ -98,8 +98,10 @@ route's delegated settlement key. Work unit, request id, job id, work id,
 price, quote, and route/constraint identity must not drift. Independently, LOC
 must be able to retrieve the same signed record by its stable
 `broker_request_id`; otherwise an untrusted caller can hide
-`Livepeer-Job-Id` and prevent reconciliation. That Modules lookup remains a P0
-under `lmoa-3bv.23` and does not make the gateway the source of truth.
+`Livepeer-Job-Id` and prevent reconciliation. Modules `3999acc` provides
+`GET /v1/exchange/{request_id}` for this purpose. LOC integration and joint
+restart conformance remain P0 under `lmoa-3bv.23`; the gateway does not become
+the source of truth.
 
 The earlier 24-hour terminal-retention agreement is superseded by
 `paid-job` 1.0.12-draft, which requires retention for maximum envelope
@@ -200,16 +202,19 @@ These block release, but not the independent catalog/client/schema retrofit:
    observed chain telemetry, reason, and evidence without inventing usage or a
    network debit. No gateway implementation change is requested. LOC must land
    and test these states before release. Coordination: `lmoa-3bv.3`.
-2. **Settlement recovery by request id.** LOC must retrieve an admitted job's
-   signed settlement from the broker using LOC's stable request id even when
-   the caller withholds `Livepeer-Job-Id`. The result must preserve the same
-   no-record, in-flight, `accounting_pending`, and terminal distinctions as
-   job-id lookup. Coordination: `lmoa-3bv.23`.
+2. **Settlement recovery by request id.** Modules `3999acc` now exposes
+   `GET /v1/exchange/{request_id}` with `SETTLED`, `ACCOUNTING_PENDING`,
+   `IN_FLIGHT`, `NOT_ADMITTED`, and `NO_RECORD` outcomes. LOC must consume it
+   idempotently and joint conformance must prove restart recovery and
+   cross-request isolation when the caller withholds `Livepeer-Job-Id`.
+   Coordination: `lmoa-3bv.23`.
 3. **Settlement retention.** The prior 24-hour rule no longer matches
    `paid-job` 1.0.12. Its replacement depends on maximum envelope spendable
    life, but governance can make that unbounded. Define when restart-persistent
    records may be deleted, preferably with an authenticated LOC
-   acknowledgement or another finite rule. The same spec revision must remove
+   acknowledgement or another finite rule. Any acknowledgement must
+   authenticate LOC independently of the customer-known request id, which
+   cannot authorize evidence deletion. The same spec revision must remove
    stale §5.3.1 language that still describes `NOT_ADMITTED` as refund evidence.
    Coordination: `lmoa-3bv.24`.
 4. **Debit retry window.** The retry lifecycle is resolved, but its implemented
@@ -237,10 +242,11 @@ land. Pinning does not introduce a source dependency.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `49ed891`, including
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `3999acc`, including
   durable debit retry `818430c`, transcription extractor `12fa0db`, and payment
   conditional expiry corrections, signed `NOT_ADMITTED`, and the final
-  four-outcome policy in `paid-job` 1.0.12-draft. Local verification
+  four-outcome policy and request-id exchange lookup in `paid-job`
+  1.0.13-draft. Local verification
   passed 39/39 protocol conformance tests, 19/19 capability-broker smoke
   assertions, the payment daemon Go test suite, and the current sender tests.
 - LOC branch `tasks/lpm-v2`: reviewed committed head `73e523d`. Expiry telemetry
