@@ -98,6 +98,267 @@ export async function updateRouteMetadata(
     .where(eq(usageReservations.workId, input.workId));
 }
 
+export interface PaidJobIdentityInput {
+  workId: string;
+  locIdempotencyKey: string;
+  locJobId: string;
+  locRequestId: string;
+  paymentWorkId: string;
+  brokerJobId: string | null;
+  protocol: 'paid-job/v1';
+  transport: 'unary' | 'stream' | 'multipart';
+  workUnit: string;
+  settleEndpoint: string;
+}
+
+/** Persist every paid-job identity before asynchronous recovery starts. */
+export async function recordPaidJobIdentity(
+  db: Db,
+  input: PaidJobIdentityInput,
+): Promise<void> {
+  const [row] = await db
+    .update(usageReservations)
+    .set({
+      locIdempotencyKey: input.locIdempotencyKey,
+      locJobId: input.locJobId,
+      locRequestId: input.locRequestId,
+      paymentWorkId: input.paymentWorkId,
+      brokerJobId: input.brokerJobId,
+      jobProtocol: input.protocol,
+      jobTransport: input.transport,
+      selectedWorkUnit: input.workUnit,
+      settleEndpoint: input.settleEndpoint,
+      settlementLookupState: 'pending',
+      settlementLookupNextAt: new Date(),
+      settlementLookupUpdatedAt: new Date(),
+      settlementLookupLastError: null,
+    })
+    .where(eq(usageReservations.workId, input.workId))
+    .returning({ id: usageReservations.id });
+  if (!row) throw new Error(`reservation ${input.workId} not found`);
+}
+
+export type SettlementLookupState =
+  | 'pending'
+  | 'accounting_pending'
+  | 'in_flight'
+  | 'ready'
+  | 'not_admitted'
+  | 'no_record'
+  | 'evidence_expired'
+  | 'failed';
+
+export interface PendingSettlementLookup {
+  id: string;
+  brokerUrl: string;
+  brokerJobId: string | null;
+  locRequestId: string;
+  paymentWorkId: string;
+  workUnit: string;
+  attempts: number;
+}
+
+/** Read-only broker lookups are safe to duplicate across replicas. */
+export async function claimPendingSettlementLookups(
+  db: Db,
+  limit: number,
+): Promise<PendingSettlementLookup[]> {
+  const rows = await db.execute(sql`
+    SELECT id, broker_url, broker_job_id, loc_request_id, payment_work_id,
+           selected_work_unit, settlement_lookup_attempts
+    FROM usage_reservations
+    WHERE settlement_lookup_state IN ('pending', 'accounting_pending', 'in_flight')
+      AND settlement_lookup_next_at <= now()
+      AND broker_url IS NOT NULL
+      AND loc_request_id IS NOT NULL
+      AND payment_work_id IS NOT NULL
+      AND selected_work_unit IS NOT NULL
+    ORDER BY settlement_lookup_next_at ASC
+    LIMIT ${limit}
+    FOR UPDATE SKIP LOCKED
+  `);
+  return rows.rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      id: requiredText(r, 'id'),
+      brokerUrl: requiredText(r, 'broker_url'),
+      brokerJobId: optionalText(r, 'broker_job_id'),
+      locRequestId: requiredText(r, 'loc_request_id'),
+      paymentWorkId: requiredText(r, 'payment_work_id'),
+      workUnit: requiredText(r, 'selected_work_unit'),
+      attempts: requiredNonnegativeInteger(r, 'settlement_lookup_attempts'),
+    };
+  });
+}
+
+export async function deferSettlementLookup(
+  db: Db,
+  id: string,
+  state: 'pending' | 'accounting_pending' | 'in_flight' | 'no_record',
+  nextAt: Date,
+  detail: string | null,
+): Promise<void> {
+  await db
+    .update(usageReservations)
+    .set({
+      settlementLookupState: state,
+      settlementLookupAttempts: sql`${usageReservations.settlementLookupAttempts} + 1`,
+      settlementLookupNextAt: nextAt,
+      settlementLookupUpdatedAt: new Date(),
+      settlementLookupLastError: detail?.slice(0, 500) ?? null,
+    })
+    .where(eq(usageReservations.id, id));
+}
+
+export interface SettlementEvidenceIdentity {
+  requestId: string;
+  brokerJobId: string | null;
+  paymentWorkId: string;
+  workUnit: string;
+}
+
+export interface SettlementEvidence extends Omit<SettlementEvidenceIdentity, 'brokerJobId'> {
+  brokerJobId: string;
+  encoded: string;
+  envelope: Record<string, unknown>;
+  actualUnits: string;
+  debitedUnits: string;
+  billedValueWei: string;
+  outcome: string;
+}
+
+export class SettlementEvidenceDriftError extends Error {
+  constructor(readonly differences: string[]) {
+    super(`settlement evidence identity drift: ${differences.join('; ')}`);
+    this.name = 'SettlementEvidenceDriftError';
+  }
+}
+
+export function validateSettlementEvidenceIdentity(
+  expected: SettlementEvidenceIdentity,
+  actual: SettlementEvidenceIdentity,
+): string[] {
+  const differences: string[] = [];
+  for (const field of ['requestId', 'brokerJobId', 'paymentWorkId', 'workUnit'] as const) {
+    // A response can be lost after admission, so brokerJobId is learned
+    // from the signed request-id lookup when it was not observed inline.
+    if (field === 'brokerJobId' && expected[field] === null) continue;
+    if (expected[field] !== actual[field]) {
+      differences.push(`${field}: expected ${expected[field]}, received ${actual[field]}`);
+    }
+  }
+  return differences;
+}
+
+/** Store the complete signed claim only when all persisted identities agree.
+ * Drift is durably marked failed before the caller receives the error. */
+export async function recordSettlementEvidence(
+  db: Db,
+  id: string,
+  evidence: SettlementEvidence,
+): Promise<void> {
+  for (const [name, value] of [
+    ['actualUnits', evidence.actualUnits],
+    ['debitedUnits', evidence.debitedUnits],
+    ['billedValueWei', evidence.billedValueWei],
+  ] as const) {
+    if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+      throw new Error(`${name} must be an unsigned base-10 integer string`);
+    }
+  }
+
+  const drift = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({
+        requestId: usageReservations.locRequestId,
+        brokerJobId: usageReservations.brokerJobId,
+        paymentWorkId: usageReservations.paymentWorkId,
+        workUnit: usageReservations.selectedWorkUnit,
+      })
+      .from(usageReservations)
+      .where(eq(usageReservations.id, id))
+      .for('update');
+    if (!row) return [`reservation: ${id} not found`];
+    const expected: SettlementEvidenceIdentity = {
+      requestId: row.requestId ?? '<missing>',
+      brokerJobId: row.brokerJobId,
+      paymentWorkId: row.paymentWorkId ?? '<missing>',
+      workUnit: row.workUnit ?? '<missing>',
+    };
+    const differences = validateSettlementEvidenceIdentity(expected, evidence);
+    if (differences.length > 0) {
+      await tx
+        .update(usageReservations)
+        .set({
+          settlementLookupState: 'failed',
+          settlementLookupUpdatedAt: new Date(),
+          settlementLookupLastError: `identity drift: ${differences.join('; ')}`.slice(0, 500),
+        })
+        .where(eq(usageReservations.id, id));
+      return differences;
+    }
+    await tx
+      .update(usageReservations)
+      .set({
+        settlementLookupState: 'ready',
+        settlementLookupUpdatedAt: new Date(),
+        settlementLookupLastError: null,
+        brokerJobId: evidence.brokerJobId,
+        settlementEncoded: evidence.encoded,
+        settlementEnvelope: evidence.envelope,
+        settlementCapturedAt: new Date(),
+        brokerActualUnits: evidence.actualUnits,
+        brokerDebitedUnits: evidence.debitedUnits,
+        brokerBilledValueWei: evidence.billedValueWei,
+        brokerSettlementOutcome: evidence.outcome,
+      })
+      .where(eq(usageReservations.id, id));
+    return [];
+  });
+  if (drift.length > 0) throw new SettlementEvidenceDriftError(drift);
+}
+
+export async function recordGatewayObservation(
+  db: Db,
+  workId: string,
+  units: string | null,
+  source: string | null,
+): Promise<void> {
+  if (units !== null && !/^(0|[1-9][0-9]*)$/.test(units)) {
+    throw new Error('gateway observed units must be an unsigned base-10 integer string');
+  }
+  await db
+    .update(usageReservations)
+    .set({ gatewayObservedUnits: units, gatewayObservationSource: source })
+    .where(eq(usageReservations.workId, workId));
+}
+
+function requiredText(row: Record<string, unknown>, field: string): string {
+  const value = row[field];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`invalid ${field} in settlement lookup row`);
+  }
+  return value;
+}
+
+function optionalText(row: Record<string, unknown>, field: string): string | null {
+  const value = row[field];
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`invalid ${field} in settlement lookup row`);
+  }
+  return value;
+}
+
+function requiredNonnegativeInteger(row: Record<string, unknown>, field: string): number {
+  const value = row[field];
+  const parsed = typeof value === 'number' ? value : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`invalid ${field} in settlement lookup row`);
+  }
+  return parsed;
+}
+
 export interface RefundInput {
   workId: string;
   latencyMs: number;
