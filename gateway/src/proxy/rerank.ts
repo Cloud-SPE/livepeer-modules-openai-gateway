@@ -66,6 +66,7 @@ export async function registerRerankRoute(
         capability,
         requestedModel,
         transport: 'unary',
+        expectedWorkUnit: 'requests',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
@@ -76,6 +77,7 @@ export async function registerRerankRoute(
           capability,
           offering,
           estimatedUnits: 1,
+          maxTotalUnits: 1,
           maxJobAttempts: deps.config.locJobRetries + 1,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',

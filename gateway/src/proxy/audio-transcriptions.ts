@@ -91,6 +91,7 @@ export async function registerAudioTranscriptionsRoute(
         capability,
         requestedModel,
         transport: 'multipart',
+        expectedWorkUnit: 'seconds',
       });
 
       try {

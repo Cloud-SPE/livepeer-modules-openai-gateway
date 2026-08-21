@@ -62,6 +62,7 @@ interface DispatchCommon {
   capability: string;
   offering: string;
   estimatedUnits: number;
+  maxTotalUnits?: number;
   idempotencyKey: string;
   /** Total job-open attempts (default 3 = 1 + 2 retries). */
   maxJobAttempts?: number;
@@ -150,6 +151,9 @@ async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
         offering: opts.offering,
         transport,
         estimatedUnits: Math.max(1, Math.floor(opts.estimatedUnits)),
+        ...(opts.maxTotalUnits !== undefined
+          ? { maxTotalUnits: Math.max(1, Math.floor(opts.maxTotalUnits)) }
+          : {}),
       });
     } catch (err) {
       lastError = err;

@@ -140,6 +140,21 @@ Every request supplies a bounded LOC `max_total_units`; a stream may terminate
 when measured usage reaches the funded ceiling. There is no refill or balance
 warning in paid-job work.
 
+Endpoint funding uses the product unit declared by the offering:
+
+| Endpoint | Required unit | Estimate and funded ceiling |
+|---|---|---|
+| Chat | `tokens` | Prompt estimate plus up to 256 expected output tokens; ceiling uses the caller's output-token limit (default 1024). |
+| Embeddings | `tokens` | Approximate input tokens; UTF-8 byte count is the conservative ceiling. |
+| Images | `images` | Positive integer request `n` (default 1); estimate equals ceiling. |
+| TTS | `characters` | Unicode code points in `input`, never UTF-16 code units or bytes; estimate equals ceiling. |
+| Rerank | `requests` | One per request; estimate equals ceiling. |
+| Transcription | `seconds` | Broker extraction is settled, but the pre-dispatch gateway ceiling remains open: duration is not available without parsing the uploaded container, and an arbitrary byte-rate estimate is not a safe bound for every supported codec. |
+
+When the cached catalog contains the offering, the gateway rejects a work-unit
+mismatch before opening LOC. LOC and the signed settlement repeat that check at
+the financial boundary.
+
 ## Usage and accounting semantics
 
 The seller's signed claim, money actually moved, and buyer-side observation

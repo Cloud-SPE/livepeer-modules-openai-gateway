@@ -114,3 +114,17 @@ test('capability mismatch is not resolved across capabilities', async () => {
   assert.equal(resolved.offering, 'Qwen3.6-27B');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');
 });
+
+test('declared endpoint work-unit drift is rejected before LOC open', async () => {
+  await assert.rejects(
+    resolveRoute({
+      catalog: catalogOf([candidate({ workUnit: 'characters' })]),
+      modelMap: {},
+      capability: 'openai:chat-completions',
+      requestedModel: 'offering-id',
+      transport: 'unary',
+      expectedWorkUnit: 'tokens',
+    }),
+    /uses work unit characters; expected tokens/,
+  );
+});

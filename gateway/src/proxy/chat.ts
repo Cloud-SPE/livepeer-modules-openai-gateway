@@ -71,17 +71,19 @@ export async function registerChatRoute(
         capability,
         requestedModel,
         transport: isStream ? 'stream' : 'unary',
+        expectedWorkUnit: 'tokens',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
       const bodyStr = JSON.stringify(upstreamBody);
-      const estimatedUnits = estimatedChatWorkUnits(body);
+      const funding = chatFunding(body);
 
       if (isStream) {
         await runStreaming(deps, req, reply, {
           capability,
           offering,
-          estimatedUnits,
+          estimatedUnits: funding.estimatedUnits,
+          maxTotalUnits: funding.maxTotalUnits,
           bodyStr,
           requestId,
           handle,
@@ -95,7 +97,8 @@ export async function registerChatRoute(
           loc: deps.loc,
           capability,
           offering,
-          estimatedUnits,
+          estimatedUnits: funding.estimatedUnits,
+          maxTotalUnits: funding.maxTotalUnits,
           maxJobAttempts: deps.config.locJobRetries + 1,
           body: bodyStr,
           contentType: 'application/json',
@@ -130,6 +133,7 @@ interface StreamingInput {
   capability: string;
   offering: string;
   estimatedUnits: number;
+  maxTotalUnits: number;
   bodyStr: string;
   requestId: string;
   handle: ReservationHandle;
@@ -148,6 +152,7 @@ async function runStreaming(
       capability: input.capability,
       offering: input.offering,
       estimatedUnits: input.estimatedUnits,
+      maxTotalUnits: input.maxTotalUnits,
       maxJobAttempts: deps.config.locJobRetries + 1,
       body: input.bodyStr,
       contentType: 'application/json',
@@ -228,11 +233,21 @@ export function parseTotalTokens(body: BodyInit | null): number | null {
 }
 
 function estimatedChatWorkUnits(body: ChatCompletionsBody): number {
+  return chatFunding(body).estimatedUnits;
+}
+
+export function chatFunding(body: ChatCompletionsBody): {
+  estimatedUnits: number;
+  maxTotalUnits: number;
+} {
   const promptTokens = estimateValueTokens(body.messages) + estimateValueTokens(body.input);
   const completionBudget = readPositiveInt(body.max_completion_tokens)
     ?? readPositiveInt(body.max_tokens)
     ?? 1024;
-  return Math.max(1, promptTokens + completionBudget);
+  return {
+    estimatedUnits: Math.max(1, promptTokens + Math.min(completionBudget, 256)),
+    maxTotalUnits: Math.max(1, promptTokens + completionBudget),
+  };
 }
 
 function estimateValueTokens(value: unknown): number {

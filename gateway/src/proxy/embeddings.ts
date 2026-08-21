@@ -61,17 +61,19 @@ export async function registerEmbeddingsRoute(
         capability,
         requestedModel,
         transport: 'unary',
+        expectedWorkUnit: 'tokens',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
-        const estimatedUnits = estimateEmbeddingUnits(body.input);
+        const funding = embeddingFunding(body.input);
         const dispatched = await dispatchReqresp({
           loc: deps.loc,
           capability,
           offering,
-          estimatedUnits,
+          estimatedUnits: funding.estimatedUnits,
+          maxTotalUnits: funding.maxTotalUnits,
           maxJobAttempts: deps.config.locJobRetries + 1,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
@@ -124,6 +126,26 @@ function estimateEmbeddingUnits(input: unknown): number {
       input.reduce((sum, item) => sum + estimateEmbeddingUnits(item), 0),
     );
   }
+  return 1;
+}
+
+export function embeddingFunding(input: unknown): {
+  estimatedUnits: number;
+  maxTotalUnits: number;
+} {
+  const estimatedUnits = estimateEmbeddingUnits(input);
+  return {
+    estimatedUnits,
+    maxTotalUnits: Math.max(estimatedUnits, embeddingByteCeiling(input)),
+  };
+}
+
+function embeddingByteCeiling(input: unknown): number {
+  if (typeof input === 'string') return Math.max(1, Buffer.byteLength(input, 'utf8'));
+  if (Array.isArray(input)) {
+    return Math.max(1, input.reduce((sum, item) => sum + embeddingByteCeiling(item), 0));
+  }
+  // Numeric token ids are already tokenized and count one-for-one.
   return 1;
 }
 

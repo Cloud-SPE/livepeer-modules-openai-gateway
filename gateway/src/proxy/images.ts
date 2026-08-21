@@ -53,7 +53,7 @@ export async function registerImagesRoute(
         apiKeyId: auth.apiKeyId,
         capability,
         model: requestedModel,
-        estimatedWorkUnits: typeof body.n === 'number' && body.n > 0 ? body.n : 1,
+        estimatedWorkUnits: imageCount(body.n),
       });
 
       const { offering, runnerModel } = await resolveRoute({
@@ -62,17 +62,19 @@ export async function registerImagesRoute(
         capability,
         requestedModel,
         transport: 'unary',
+        expectedWorkUnit: 'images',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
-        const estimatedUnits = typeof body.n === 'number' && body.n > 0 ? body.n : 1;
+        const estimatedUnits = imageCount(body.n);
         const dispatched = await dispatchReqresp({
           loc: deps.loc,
           capability,
           offering,
           estimatedUnits,
+          maxTotalUnits: estimatedUnits,
           maxJobAttempts: deps.config.locJobRetries + 1,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
@@ -100,6 +102,10 @@ export async function registerImagesRoute(
       }
     },
   );
+}
+
+export function imageCount(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 1;
 }
 
 function brokerStatus(err: unknown): number {

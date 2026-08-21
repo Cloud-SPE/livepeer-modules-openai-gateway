@@ -29,6 +29,7 @@ export interface ResolveInput {
   capability: string;
   requestedModel: string;
   transport: JobTransport;
+  expectedWorkUnit?: string;
 }
 
 export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> {
@@ -46,6 +47,11 @@ export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> 
       c.offering === input.requestedModel,
   );
   const pick = matches.find((c) => c.transports.includes(input.transport));
+  if (pick && input.expectedWorkUnit && pick.workUnit !== input.expectedWorkUnit) {
+    throw new Error(
+      `offering ${pick.offering} uses work unit ${pick.workUnit}; expected ${input.expectedWorkUnit}`,
+    );
+  }
 
   const offering = pick?.offering ?? input.requestedModel;
   const runnerModel =

@@ -53,7 +53,7 @@ export async function registerAudioSpeechRoute(
         apiKeyId: auth.apiKeyId,
         capability,
         model: requestedModel,
-        estimatedWorkUnits: typeof body.input === 'string' ? Math.max(1, body.input.length) : 1,
+        estimatedWorkUnits: textCodePoints(body.input),
       });
 
       const { offering, runnerModel } = await resolveRoute({
@@ -62,18 +62,19 @@ export async function registerAudioSpeechRoute(
         capability,
         requestedModel,
         transport: 'unary',
+        expectedWorkUnit: 'characters',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
-        const estimatedUnits =
-          typeof body.input === 'string' ? Math.max(1, body.input.length) : 1;
+        const estimatedUnits = textCodePoints(body.input);
         const dispatched = await dispatchReqresp({
           loc: deps.loc,
           capability,
           offering,
           estimatedUnits,
+          maxTotalUnits: estimatedUnits,
           maxJobAttempts: deps.config.locJobRetries + 1,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
@@ -82,7 +83,7 @@ export async function registerAudioSpeechRoute(
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         await commitReservation(deps, handle, {
-          workUnits: typeof body.input === 'string' ? body.input.length : null,
+          workUnits: typeof body.input === 'string' ? textCodePoints(body.input) : null,
           statusCode: dispatched.result.status,
         });
         await reply
@@ -104,6 +105,10 @@ export async function registerAudioSpeechRoute(
       }
     },
   );
+}
+
+export function textCodePoints(value: unknown): number {
+  return typeof value === 'string' ? Math.max(1, [...value].length) : 1;
 }
 
 function brokerStatus(err: unknown): number {
