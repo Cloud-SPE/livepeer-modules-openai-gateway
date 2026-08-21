@@ -1,7 +1,5 @@
-import { HEADER, SPEC_VERSION } from "./headers.js";
+import { HEADER, PAID_JOB_PROTOCOL } from "./headers.js";
 import { errorFromResponse } from "./errors.js";
-
-export const MODE = "http-reqresp@v0";
 
 export interface SendOpts {
   brokerUrl: string;
@@ -10,7 +8,7 @@ export interface SendOpts {
   paymentBlob: string;
   body: BodyInit | null;
   contentType?: string;
-  requestId?: string;
+  requestId: string;
   signal?: AbortSignal;
 }
 
@@ -19,7 +17,9 @@ export interface SendResult {
   body: ArrayBuffer;
   headers: Headers;
   workUnits: number;
-  requestId: string | undefined;
+  workUnit: string | undefined;
+  jobId: string | undefined;
+  requestId: string;
 }
 
 export async function send(opts: SendOpts): Promise<SendResult> {
@@ -27,12 +27,11 @@ export async function send(opts: SendOpts): Promise<SendResult> {
   headers.set(HEADER.CAPABILITY, opts.capability);
   headers.set(HEADER.OFFERING, opts.offering);
   headers.set(HEADER.PAYMENT, opts.paymentBlob);
-  headers.set(HEADER.SPEC_VERSION, SPEC_VERSION);
-  headers.set(HEADER.MODE, MODE);
-  if (opts.requestId) headers.set(HEADER.REQUEST_ID, opts.requestId);
+  headers.set(HEADER.PROTOCOL, PAID_JOB_PROTOCOL);
+  headers.set(HEADER.REQUEST_ID, opts.requestId);
   if (opts.contentType) headers.set("Content-Type", opts.contentType);
 
-  const url = new URL("/v1/cap", opts.brokerUrl).toString();
+  const url = new URL("/v1/job", opts.brokerUrl).toString();
   const resp = await fetch(url, {
     method: "POST",
     headers,
@@ -41,8 +40,6 @@ export async function send(opts: SendOpts): Promise<SendResult> {
   });
 
   const respBody = await resp.arrayBuffer();
-  const requestId = resp.headers.get(HEADER.REQUEST_ID) ?? undefined;
-
   if (resp.status >= 400) {
     throw errorFromResponse(resp.status, resp.headers, respBody);
   }
@@ -50,5 +47,13 @@ export async function send(opts: SendOpts): Promise<SendResult> {
   const wuStr = resp.headers.get(HEADER.WORK_UNITS);
   const workUnits = wuStr ? parseInt(wuStr, 10) || 0 : 0;
 
-  return { status: resp.status, body: respBody, headers: resp.headers, workUnits, requestId };
+  return {
+    status: resp.status,
+    body: respBody,
+    headers: resp.headers,
+    workUnits,
+    workUnit: resp.headers.get(HEADER.WORK_UNIT) ?? undefined,
+    jobId: resp.headers.get(HEADER.JOB_ID) ?? undefined,
+    requestId: opts.requestId,
+  };
 }

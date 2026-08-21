@@ -22,7 +22,13 @@ async function withMockBroker(
     req.resume();
     req.on('end', () => {
       const code = typeof status === 'function' ? status(requests.length) : status;
-      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.writeHead(code, {
+        'Content-Type': 'application/json',
+        'Livepeer-Job-Id': `broker-job-${requests.length}`,
+        'Livepeer-Work-Unit': 'tokens',
+        'Livepeer-Work-Units': code >= 400 ? '0' : '1',
+        ...(code === 409 ? { 'Livepeer-Error': 'job_in_flight' } : {}),
+      });
       res.end(JSON.stringify(code >= 400 ? { message: 'boom' } : { ok: true }));
     });
   });
@@ -114,6 +120,7 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
     assert.equal(calls.settles.length, 0);
     assert.deepEqual(out.jobRef, {
       jobId: 'job-1',
+      brokerJobId: 'broker-job-1',
       requestId: 'broker-request-1',
       workId: 'work-1',
       protocol: 'paid-job/v1',
@@ -124,7 +131,12 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
     assert.equal(out.candidate.brokerUrl, brokerUrl);
     assert.equal(out.candidate.model, 'llama-3');
     assert.equal(brokerRequests.length, 1);
+    assert.equal(brokerRequests[0]!.url, '/v1/job');
     assert.equal(brokerRequests[0]!.headers['livepeer-payment'], 'envelope-1');
+    assert.equal(brokerRequests[0]!.headers['livepeer-protocol'], 'paid-job/v1');
+    assert.equal(brokerRequests[0]!.headers['livepeer-request-id'], 'broker-request-1');
+    assert.equal(brokerRequests[0]!.headers['livepeer-mode'], undefined);
+    assert.equal(brokerRequests[0]!.headers['livepeer-spec-version'], undefined);
   });
 });
 
@@ -168,6 +180,28 @@ test('broker 4xx: fails immediately without retry', async () => {
       (err: unknown) => {
         assert.ok(err instanceof LivepeerBrokerError);
         assert.equal(err.status, 400);
+        return true;
+      },
+    );
+    assert.equal(calls.opens, 1);
+  });
+});
+
+test('broker idempotency refusal is exposed as a typed outcome', async () => {
+  await withMockBroker(409, async (brokerUrl) => {
+    const { loc, calls } = fakeLoc(() => job(brokerUrl, 1));
+    await assert.rejects(
+      dispatchReqresp({
+        loc,
+        capability: 'c',
+        offering: 'o',
+        estimatedUnits: 1,
+        requestId: 'r',
+        body: null,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof LivepeerBrokerError);
+        assert.equal(err.code, 'job_in_flight');
         return true;
       },
     );

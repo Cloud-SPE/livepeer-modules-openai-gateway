@@ -9,6 +9,7 @@
 import * as httpMultipart from '../proxy/livepeer/http-multipart.js';
 import * as httpReqresp from '../proxy/livepeer/http-reqresp.js';
 import * as httpStream from '../proxy/livepeer/http-stream.js';
+import { LivepeerBrokerError } from '../proxy/livepeer/errors.js';
 import { LocApiError, type JobTransport, type LocClient, type OpenJobResponse } from './client.js';
 
 // Kept shape-compatible with the daemon-era RouteCandidate so the
@@ -37,6 +38,7 @@ export interface RouteCandidate {
 /** Handle for settling the LOC job once actual units are known. */
 export interface JobRef {
   jobId: string;
+  brokerJobId: string;
   requestId: string;
   workId: string;
   protocol: 'paid-job/v1';
@@ -128,7 +130,7 @@ export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSucc
 // handler can persist a durable settle(0) (at-least-once; LOC's 409
 // job_already_settled makes the overlap idempotent-safe).
 
-async function attemptJob<T>(
+async function attemptJob<T extends { jobId?: string; workUnit?: string }>(
   opts: DispatchCommon,
   transport: JobTransport,
   send: (job: OpenJobResponse) => Promise<T>,
@@ -154,10 +156,11 @@ async function attemptJob<T>(
 
   try {
     const result = await send(job);
+    validateBrokerMetadata(result, job);
     return {
       candidate: candidateFromJob(job, opts.capability, opts.offering),
       result,
-      jobRef: jobRef(job),
+      jobRef: jobRef(job, result.jobId!),
     };
   } catch (err) {
     attachJobContext(err, job, opts.capability, opts.offering);
@@ -211,9 +214,10 @@ function attachJobContext(
   }
 }
 
-function jobRef(job: OpenJobResponse): JobRef {
+function jobRef(job: OpenJobResponse, brokerJobId = ''): JobRef {
   return {
     jobId: job.jobId,
+    brokerJobId,
     requestId: job.requestId,
     workId: job.workId,
     protocol: job.protocol,
@@ -221,6 +225,26 @@ function jobRef(job: OpenJobResponse): JobRef {
     workUnit: job.workUnit,
     settleEndpoint: job.settleEndpoint,
   };
+}
+
+function validateBrokerMetadata(
+  result: { jobId?: string; workUnit?: string },
+  job: OpenJobResponse,
+): void {
+  if (!result.jobId) {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'protocol_response_invalid',
+      message: 'broker response missing Livepeer-Job-Id',
+    });
+  }
+  if (!result.workUnit || result.workUnit !== job.workUnit) {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'work_unit_mismatch',
+      message: `broker work unit ${result.workUnit ?? '<missing>'} does not match LOC ${job.workUnit}`,
+    });
+  }
 }
 
 /** Read the jobRef a failed dispatch attached to its error, if any. */

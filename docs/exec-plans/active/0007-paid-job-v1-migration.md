@@ -64,7 +64,7 @@ Out of scope:
 - [x] Replace catalog interaction modes with protocol and transports
   (`lmoa-3bv.7`).
 - [ ] Implement the v2 LOC reservation client (`lmoa-3bv.8`).
-- [ ] Implement the broker `POST /v1/job` transport client
+- [x] Implement the broker `POST /v1/job` transport client
   (`lmoa-3bv.9`).
 - [ ] Migrate durable reservation and settlement evidence storage
   (`lmoa-3bv.10`).
