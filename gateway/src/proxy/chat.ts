@@ -1,9 +1,8 @@
 // POST /v1/chat/completions — streaming + unary.
 //
-// Streaming: force `stream_options.include_usage = true` so the broker
-// emits a trailing usage frame. Pipe SSE chunks straight to the client
-// as they arrive; in parallel, accumulate them in-memory to parse the
-// final usage chunk for billing settlement.
+// Streaming bytes pass through without body mutation or transcript
+// buffering. Accounting is recovered independently from the broker's
+// signed terminal settlement after the stream ends.
 //
 // Adapted from livepeer-network-modules/openai-gateway/src/routes/chat-completions.ts.
 
@@ -30,10 +29,6 @@ import { rateLimitV1 } from './rateLimit.js';
 interface ChatCompletionsBody {
   model?: unknown;
   stream?: boolean;
-  stream_options?: {
-    include_usage?: boolean;
-    [k: string]: unknown;
-  };
   [k: string]: unknown;
 }
 
@@ -79,8 +74,7 @@ export async function registerChatRoute(
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
-      const dispatchBody = isStream ? withForcedUsageChunk(upstreamBody) : upstreamBody;
-      const bodyStr = JSON.stringify(dispatchBody);
+      const bodyStr = JSON.stringify(upstreamBody);
       const estimatedUnits = estimatedChatWorkUnits(body);
 
       if (isStream) {
@@ -180,12 +174,10 @@ async function runStreaming(
   reply.raw.setHeader(HEADER.REQUEST_ID, input.requestId);
   reply.hijack();
 
-  const transcript: Buffer[] = [];
   let streamErr: unknown = null;
   try {
     for await (const chunk of dispatched.result.stream) {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      transcript.push(buf);
       reply.raw.write(buf);
     }
   } catch (err) {
@@ -201,10 +193,6 @@ async function runStreaming(
 
   if (streamErr) {
     req.log.warn({ err: streamErr, requestId: input.requestId }, 'chat stream ended with error');
-    // Mid-stream failure: the trailing usage frame never arrived, so
-    // actual units are unknowable. Settle the LOC job with 0 (full
-    // refund of the estimate); LOC's reconciliation janitor verifies
-    // against the daemon ledger out of band.
     await refundReservation(deps, input.handle, {
       statusCode: dispatched.result.status,
       errorText: (streamErr as Error).message ?? 'stream_error',
@@ -212,9 +200,8 @@ async function runStreaming(
     return;
   }
 
-  const usage = parseStreamingUsage(Buffer.concat(transcript).toString('utf8'));
   await commitReservation(deps, input.handle, {
-    workUnits: usage,
+    workUnits: null,
     statusCode: dispatched.result.status,
   });
 }
@@ -223,14 +210,6 @@ async function runStreaming(
 
 export function pickModel(body: ChatCompletionsBody): string | null {
   return typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
-}
-
-export function withForcedUsageChunk(body: ChatCompletionsBody): ChatCompletionsBody {
-  return {
-    ...body,
-    stream: true,
-    stream_options: { ...(body.stream_options ?? {}), include_usage: true },
-  };
 }
 
 export function parseTotalTokens(body: BodyInit | null): number | null {
@@ -246,28 +225,6 @@ export function parseTotalTokens(body: BodyInit | null): number | null {
   } catch {
     return null;
   }
-}
-
-/** Scan SSE transcript for the trailing usage frame. Last wins. */
-export function parseStreamingUsage(transcript: string): number | null {
-  let total: number | null = null;
-  // SSE events are blocks separated by blank lines; "data: " lines carry payloads.
-  for (const block of transcript.split(/\n\n+/)) {
-    for (const line of block.split('\n')) {
-      if (!line.startsWith('data: ')) continue;
-      const payload = line.slice(6).trim();
-      if (payload === '[DONE]') continue;
-      try {
-        const obj = JSON.parse(payload) as { usage?: { total_tokens?: number } };
-        if (typeof obj?.usage?.total_tokens === 'number') {
-          total = obj.usage.total_tokens;
-        }
-      } catch {
-        // ignore malformed line
-      }
-    }
-  }
-  return total;
 }
 
 function estimatedChatWorkUnits(body: ChatCompletionsBody): number {
