@@ -56,6 +56,10 @@ Out of scope:
   (`lmoa-3bv.2`).
 - [ ] Resolve LOC reservations that never reach broker admission
   (`lmoa-3bv.3`).
+- [ ] Add independent broker settlement recovery by LOC request id
+  (`lmoa-3bv.23`).
+- [ ] Resolve broker settlement retention under governance-revivable envelopes
+  (`lmoa-3bv.24`).
 - [x] Land transcription duration metering (`lmoa-3bv.4`).
 - [ ] Align the effective debit retry schedule with its advertised recovery
   window (`lmoa-3bv.22`).
@@ -143,14 +147,18 @@ for the unresolved financial terminal states.
 - **2026-08-21 — prefer broker-side transcription parsing.** This gateway owns
   no runners, so a runner header is safe only if it is a universal capability
   contract.
-- **2026-08-21 — 24-hour broker retention is the minimum retrieval SLA.** The
-  gateway uses an independent durable lookup loop and deadline-aware alerts;
-  the bounded LOC-settlement retry count does not apply before claim capture.
+- **2026-08-21 — the 24-hour retention assumption is superseded.** `paid-job`
+  1.0.12 defines retention using maximum envelope spendable life, while also
+  establishing that governance can revive an issued ticket. A finite deletion
+  or LOC-acknowledgement contract is required before the gateway can set a hard
+  retrieval deadline. Its durable lookup loop remains independent of the
+  bounded LOC-settlement retry count.
 - **2026-08-21 — no assertion-only abandon.** A never-admitted LOC reservation
-  cannot be refunded merely because the envelope expired: expiry prevents
-  future spend but does not disprove earlier work. LOC's safe fallback is a
-  conservative full charge unless Modules provides signed non-admission
-  evidence that LOC can retrieve independently, preferably by `request_id`.
+  has no automatic refund path. Governance can retroactively extend or revive
+  tickets, so the deployed contract provides no unconditional envelope expiry.
+  `NOT_ADMITTED` is attributable audit evidence only. LOC retains unresolved
+  jobs and may apply a distinct idempotent `conservative_full_charge` at an
+  operational deadline without fabricating usage or network debit.
 - **2026-08-21 — settlement 409 preserves evidence.**
   `job_already_settled` is terminal financial success after a lost LOC
   response, but the original signed claim remains stored as the audit record.
@@ -160,13 +168,11 @@ for the unresolved financial terminal states.
   fault, and LOC keeps the reservation encumbered. The current 30-second sweep
   reaches its 10-attempt cap in roughly five minutes, not 30; resolve under
   `lmoa-3bv.22` before pinning.
-- **2026-08-21 — chain expiry proves no future spend, not necessarily no prior
-  work.** The payment daemon returns `creation_round` and
-  `expires_after_round`, and exposes `current_round`. LOC persists the
-  deadline. Automatic refund remains open
-  because an admitted customer could withhold settlement until expiry; the
-  teams must choose independently retrievable evidence or a fail-closed
-  terminal accounting policy.
+- **2026-08-21 — LOC must recover settlement without caller cooperation.** A
+  caller can withhold `Livepeer-Job-Id`, so job-id-only lookup cannot protect
+  reconciliation. Modules must expose the admitted job's durable signed
+  settlement by LOC's stable `request_id`; LOC verifies the signed binding and
+  joint conformance covers restart retention and all accounting states.
 - **2026-08-21 — transcription duration extractor accepted.** Use Modules'
   `multipart-audio-duration`; keep inexact headerless MP3 estimation disabled
   unless the product deliberately opts into estimated billing.

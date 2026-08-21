@@ -57,7 +57,7 @@ request id:
 | `loc_job_id` | LOC | Identifies the funded reservation and settlement endpoint. |
 | `broker_request_id` | LOC | Sent unchanged as `Livepeer-Request-Id`; binds the LOC job to the signed broker settlement. |
 | `work_id` | Payment system | Identifies the payment identity; it is not unique to one exchange. |
-| `broker_job_id` | Broker | `Livepeer-Job-Id`; lookup key for the authoritative settlement record. |
+| `broker_job_id` | Broker | `Livepeer-Job-Id`; gateway lookup key for the authoritative settlement record when the broker response is available. |
 
 An LOC-open retry uses the same idempotency key and byte-equivalent JSON. A
 broker retry uses the same broker request id, capability, offering, payment
@@ -95,16 +95,21 @@ For every transport, the gateway retrieves
 retried durably. A terminal response is accepted only after its signed
 envelope and bound identifiers are persisted and LOC verifies it against the
 route's delegated settlement key. Work unit, request id, job id, work id,
-price, quote, and route/constraint identity must not drift.
+price, quote, and route/constraint identity must not drift. Independently, LOC
+must be able to retrieve the same signed record by its stable
+`broker_request_id`; otherwise an untrusted caller can hide
+`Livepeer-Job-Id` and prevent reconciliation. That Modules lookup remains a P0
+under `lmoa-3bv.23` and does not make the gateway the source of truth.
 
-The broker retains terminal records for at least 24 hours. This is a hard
-retrieval deadline, separate from LOC settlement retry. The gateway persists a
-lookup intent as soon as it knows the broker job id, retries without the
-bounded `LOC_SETTLE_MAX_ATTEMPTS` budget, and raises deadline-aware alerts well
-before expiry. Once the complete signed claim is stored locally, subsequent
-LOC retries no longer depend on broker retention. The 24-hour minimum covers
-the routine outage target; longer broker retention may be operator-configured
-but is not a gateway release requirement.
+The earlier 24-hour terminal-retention agreement is superseded by
+`paid-job` 1.0.12-draft, which requires retention for maximum envelope
+spendable life plus a dispute/recovery window. Because governance can revive
+an issued ticket, that maximum is not finite under the deployed contract. The
+teams must define an enforceable deletion/acknowledgement rule under
+`lmoa-3bv.24`. Independently of that decision, the gateway persists a lookup
+intent as soon as it knows the broker job id and retries without the bounded
+`LOC_SETTLE_MAX_ATTEMPTS` budget. Once the complete signed claim is stored
+locally, subsequent LOC retries no longer depend on broker retention.
 
 `DEBIT_FAILED` is an accounting fault, not successful settlement. The gateway
 records it, alerts it, and does not represent the LOC reservation as settled.
@@ -184,19 +189,30 @@ into `settled` or silently converted to zero usage.
 
 These block release, but not the independent catalog/client/schema retrofit:
 
-1. **Reservation without broker admission.** An assertion-based abandon or
-   LOC-only timeout is unsafe because the already-issued envelope could still
-   be submitted after release. Modules now returns immutable
-   `creation_round` and `expires_after_round` values with each minted envelope;
-   chain expiry proves the envelope cannot create future liability. It does not
-   prove that work was not delivered before expiry with settlement evidence
-   withheld. LOC persists the expiry, and Modules exposes authoritative
-   `current_round`. LOC has confirmed its safe fallback is a conservative full
-   charge after expiry unless Modules supplies signed non-admission evidence
-   independently retrievable by LOC, preferably using LOC's `request_id`.
-   There is no gateway abandon call or implementation change until that joint
-   contract is resolved. Coordination: `lmoa-3bv.3`.
-2. **Debit retry window.** The retry lifecycle is resolved, but its implemented
+1. **Never-admitted outcome implementation.** The policy is final: the
+   deployed chain contract has no unconditional envelope expiry because
+   governance can retroactively extend or revive tickets. LOC implements no
+   abandon, automatic refund, or re-encumbrance. Valid signed settlement is
+   settled accurately; absence of terminal evidence remains unresolved; an
+   operational deadline may produce a distinct idempotent
+   `conservative_full_charge`; signed `NOT_ADMITTED` is attributable audit
+   evidence only. The conservative outcome retains issuance/deadline fields,
+   observed chain telemetry, reason, and evidence without inventing usage or a
+   network debit. No gateway implementation change is requested. LOC must land
+   and test these states before release. Coordination: `lmoa-3bv.3`.
+2. **Settlement recovery by request id.** LOC must retrieve an admitted job's
+   signed settlement from the broker using LOC's stable request id even when
+   the caller withholds `Livepeer-Job-Id`. The result must preserve the same
+   no-record, in-flight, `accounting_pending`, and terminal distinctions as
+   job-id lookup. Coordination: `lmoa-3bv.23`.
+3. **Settlement retention.** The prior 24-hour rule no longer matches
+   `paid-job` 1.0.12. Its replacement depends on maximum envelope spendable
+   life, but governance can make that unbounded. Define when restart-persistent
+   records may be deleted, preferably with an authenticated LOC
+   acknowledgement or another finite rule. The same spec revision must remove
+   stale §5.3.1 language that still describes `NOT_ADMITTED` as refund evidence.
+   Coordination: `lmoa-3bv.24`.
+4. **Debit retry window.** The retry lifecycle is resolved, but its implemented
    timing is not the advertised “10 attempts over 30 minutes.” A 30-second
    sweep with a 10-attempt cap reaches terminal failure in roughly five
    minutes. Coordination: `lmoa-3bv.22`.
@@ -221,16 +237,16 @@ land. Pinning does not introduce a source dependency.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `6ad30b7`, including
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `49ed891`, including
   durable debit retry `818430c`, transcription extractor `12fa0db`, and payment
-  envelope expiry `c496fb4` and authoritative `current_round` exposure
-  `6ad30b7` from the payer daemon's minting clock. Local verification
+  conditional expiry corrections, signed `NOT_ADMITTED`, and the final
+  four-outcome policy in `paid-job` 1.0.12-draft. Local verification
   passed 39/39 protocol conformance tests, 19/19 capability-broker smoke
   assertions, the payment daemon Go test suite, and the current sender tests.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `bb41e45`. Expiry
+- LOC branch `tasks/lpm-v2`: reviewed committed head `73e523d`. Expiry telemetry
   persistence landed at `d7ae387`; signed `DEBIT_FAILED` rejection landed at
-  `258b36e`. The latest reliability contract deliberately leaves automatic
-  expiry release unresolved because expiry cannot disprove earlier delivery.
+  `258b36e`; the four-outcome recovery decision is recorded without adding an
+  unsafe automatic refund path.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 
