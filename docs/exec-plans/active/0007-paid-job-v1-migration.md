@@ -57,6 +57,8 @@ Out of scope:
 - [ ] Resolve LOC reservations that never reach broker admission
   (`lmoa-3bv.3`).
 - [x] Land transcription duration metering (`lmoa-3bv.4`).
+- [ ] Align the effective debit retry schedule with its advertised recovery
+  window (`lmoa-3bv.22`).
 - [ ] Pin release-ready upstream revisions (`lmoa-3bv.6`).
 
 ### Phase 2 — build the independent seam
@@ -150,16 +152,19 @@ for the unresolved financial terminal states.
 - **2026-08-21 — settlement 409 preserves evidence.**
   `job_already_settled` is terminal financial success after a lost LOC
   response, but the original signed claim remains stored as the audit record.
-- **2026-08-21 — bounded debit retry accepted.** Modules retains the payee
-  session and retries the original debit sequence while lookup returns
-  `accounting_pending`; 10 attempts over 30 minutes is an acceptable
-  configurable default. Signed `DEBIT_FAILED` remains a fault, and LOC keeps
-  the reservation encumbered.
-- **2026-08-21 — chain expiry is the never-admitted release authority.** The
-  payment daemon now returns `creation_round` and `expires_after_round`. The
-  remaining release blocker belongs at the LOC seam: observe authoritative
-  current round and idempotently release only when it is strictly greater than
-  the recorded expiry.
+- **2026-08-21 — bounded debit retry lifecycle accepted; timing remains open.**
+  Modules retains the payee session and retries the original debit sequence
+  while lookup returns `accounting_pending`. Signed `DEBIT_FAILED` remains a
+  fault, and LOC keeps the reservation encumbered. The current 30-second sweep
+  reaches its 10-attempt cap in roughly five minutes, not 30; resolve under
+  `lmoa-3bv.22` before pinning.
+- **2026-08-21 — chain expiry proves no future spend, not necessarily no prior
+  work.** The payment daemon returns `creation_round` and
+  `expires_after_round`, and its current working tree exposes
+  `current_round`. LOC persists the deadline. Automatic refund remains open
+  because an admitted customer could withhold settlement until expiry; the
+  teams must choose independently retrievable evidence or a fail-closed
+  terminal accounting policy.
 - **2026-08-21 — transcription duration extractor accepted.** Use Modules'
   `multipart-audio-duration`; keep inexact headerless MP3 estimation disabled
   unless the product deliberately opts into estimated billing.

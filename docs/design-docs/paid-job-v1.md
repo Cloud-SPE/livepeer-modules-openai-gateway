@@ -110,8 +110,11 @@ but is not a gateway release requirement.
 records it, alerts it, and does not represent the LOC reservation as settled.
 The broker durably retries the original debit identity while settlement lookup
 returns `202 accounting_pending`; only bounded exhaustion produces a signed
-`DEBIT_FAILED`. The reviewed default is 10 attempts over 30 minutes, both
-configurable. LOC rejects that outcome and keeps the reservation encumbered.
+`DEBIT_FAILED`. LOC rejects that outcome and keeps the reservation encumbered.
+The reviewed broker currently sweeps every 30 seconds and exhausts after
+either 10 attempts or 30 minutes. During a continuous outage the attempt bound
+wins after roughly five minutes, so the advertised 30-minute reconciliation
+window still requires alignment under `lmoa-3bv.22`.
 
 ### Streaming remains non-buffering
 
@@ -185,10 +188,16 @@ These block release, but not the independent catalog/client/schema retrofit:
    LOC-only timeout is unsafe because the already-issued envelope could still
    be submitted after release. Modules now returns immutable
    `creation_round` and `expires_after_round` values with each minted envelope;
-   chain expiry is the agreed unconditional proof of non-spendability. LOC's
-   reviewed working tree persists those values but does not yet query
-   authoritative current-round state or perform the idempotent post-expiry
-   release. Coordination: `lmoa-3bv.3`.
+   chain expiry proves the envelope cannot create future liability. It does not
+   prove that work was not delivered before expiry with settlement evidence
+   withheld. LOC persists the expiry, and the Modules working tree exposes
+   authoritative `current_round`, but the teams must reconcile automatic
+   release with LOC's newer fail-closed full-charge-or-evidence position.
+   Coordination: `lmoa-3bv.3`.
+2. **Debit retry window.** The retry lifecycle is resolved, but its implemented
+   timing is not the advertised “10 attempts over 30 minutes.” A 30-second
+   sweep with a 10-attempt cap reaches terminal failure in roughly five
+   minutes. Coordination: `lmoa-3bv.22`.
 
 The release gate pins immutable upstream revisions only after these contracts
 land. Pinning does not introduce a source dependency.
@@ -199,7 +208,8 @@ land. Pinning does not introduce a source dependency.
   jobs, reports `202 accounting_pending`, retries the same debit sequence, and
   signs either the successful terminal result or `DEBIT_FAILED` after bounded
   exhaustion. LOC `258b36e` rejects `DEBIT_FAILED` without settling or
-  releasing the reservation. Coordination bead `lmoa-3bv.2` is closed.
+  releasing the reservation. The lifecycle decision is closed under
+  `lmoa-3bv.2`; retry timing remains open under `lmoa-3bv.22`.
 - **Transcription duration.** Modules `12fa0db` ships the
   `multipart-audio-duration` extractor for WAV, FLAC, MP4/M4A, Ogg, WebM, and
   MP3. Exact duration rounds up to seconds. MP3 without Xing/Info or VBRI
@@ -209,16 +219,16 @@ land. Pinning does not introduce a source dependency.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed head `c496fb4`, including
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `6ad30b7`, including
   durable debit retry `818430c`, transcription extractor `12fa0db`, and payment
-  envelope expiry `c496fb4`. Local verification passed 39/39 protocol
-  conformance tests, 19/19 capability-broker smoke assertions, and the payment
-  daemon Go test suite.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `94b9d0e` plus its active
-  expiry-integration working tree. Committed code rejects signed
-  `DEBIT_FAILED`; the working tree imports and persists the new envelope expiry
-  fields but does not yet implement authoritative round observation and
-  release.
+  envelope expiry `c496fb4` and authoritative `current_round` exposure
+  `6ad30b7` from the payer daemon's minting clock. Local verification
+  passed 39/39 protocol conformance tests, 19/19 capability-broker smoke
+  assertions, the payment daemon Go test suite, and the current sender tests.
+- LOC branch `tasks/lpm-v2`: reviewed committed head `bb41e45`. Expiry
+  persistence landed at `d7ae387`; signed `DEBIT_FAILED` rejection landed at
+  `258b36e`. The latest reliability contract deliberately leaves automatic
+  expiry release unresolved because expiry cannot disprove earlier delivery.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 
