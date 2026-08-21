@@ -97,6 +97,15 @@ envelope and bound identifiers are persisted and LOC verifies it against the
 route's delegated settlement key. Work unit, request id, job id, work id,
 price, quote, and route/constraint identity must not drift.
 
+The broker retains terminal records for at least 24 hours. This is a hard
+retrieval deadline, separate from LOC settlement retry. The gateway persists a
+lookup intent as soon as it knows the broker job id, retries without the
+bounded `LOC_SETTLE_MAX_ATTEMPTS` budget, and raises deadline-aware alerts well
+before expiry. Once the complete signed claim is stored locally, subsequent
+LOC retries no longer depend on broker retention. The 24-hour minimum covers
+the routine outage target; longer broker retention may be operator-configured
+but is not a gateway release requirement.
+
 `DEBIT_FAILED` is an accounting fault, not successful settlement. The gateway
 records it, alerts it, and does not represent the LOC reservation as settled.
 The durable retry/exhaustion contract and LOC terminal behavior remain a
@@ -173,9 +182,12 @@ These block release, but not the independent catalog/client/schema retrofit:
 1. **Durable debit outcome.** Modules and LOC must define retrying debit,
    nonterminal `accounting_pending`, bounded exhaustion, and LOC treatment of
    signed `DEBIT_FAILED`. Coordination: `lmoa-3bv.2`, Modules `lnm-y08`.
-2. **Reservation without broker admission.** LOC must provide idempotent
-   abandon, expiry, or equivalent recovery when no signed broker settlement
-   can exist. Coordination: `lmoa-3bv.3`.
+2. **Reservation without broker admission.** An assertion-based abandon or
+   LOC-only timeout is unsafe because the already-issued envelope could still
+   be submitted after release. Modules and LOC must provide payer/payee
+   revocation, authoritative no-debit plus envelope expiry, or another proof
+   that makes the issued payment unspendable before LOC releases encumbrance.
+   Coordination: `lmoa-3bv.3`.
 3. **Transcription duration.** Modules must ship a universal seller-side
    contract. Because runners are external to this gateway, the preferred
    solution is `multipart-audio-duration`; a response header is acceptable
@@ -196,3 +208,6 @@ land. Pinning does not introduce a source dependency.
   `POST /v1/jobs/{id}/settle`.
 
 These hashes record what was reviewed; they are not the eventual release pins.
+
+The LOC team's confirmation and open release blockers are preserved in
+[the 2026-08-21 LOC reply](../references/2026-08-21-loc-paid-job-reply.md).

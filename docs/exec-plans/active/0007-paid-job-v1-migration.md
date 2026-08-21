@@ -141,3 +141,12 @@ for the unresolved financial terminal states.
 - **2026-08-21 — prefer broker-side transcription parsing.** This gateway owns
   no runners, so a runner header is safe only if it is a universal capability
   contract.
+- **2026-08-21 — 24-hour broker retention is the minimum retrieval SLA.** The
+  gateway uses an independent durable lookup loop and deadline-aware alerts;
+  the bounded LOC-settlement retry count does not apply before claim capture.
+- **2026-08-21 — no assertion-only abandon.** A never-admitted LOC reservation
+  can be released only after joint payer/payee evidence proves the issued
+  envelope is no longer spendable.
+- **2026-08-21 — settlement 409 preserves evidence.**
+  `job_already_settled` is terminal financial success after a lost LOC
+  response, but the original signed claim remains stored as the audit record.
