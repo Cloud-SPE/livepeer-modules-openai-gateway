@@ -29,17 +29,22 @@ export class LocApiError extends Error {
 export type JobTransport = 'unary' | 'stream' | 'multipart';
 
 export interface OpenJobRequest {
+  idempotencyKey: string;
   capability: string;
   offering: string;
+  transport: JobTransport;
   estimatedUnits: number;
   maxTotalUnits?: number;
 }
 
 export interface OpenJobResponse {
   jobId: string;
+  requestId: string;
   workId: string;
   brokerUrl: string;
-  mode: string;
+  protocol: 'paid-job/v1';
+  transport: JobTransport;
+  workUnit: string;
   /** Base64 payment bytes — goes verbatim into the Livepeer-Payment header. */
   paymentEnvelope: string;
   expectedValueWei: string;
@@ -114,8 +119,12 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
+    additionalHeaders?: Record<string, string>,
   ): Promise<unknown> => {
-    const headers: Record<string, string> = { 'X-API-Key': cfg.apiKey };
+    const headers: Record<string, string> = {
+      'X-API-Key': cfg.apiKey,
+      ...additionalHeaders,
+    };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
     let resp: Response;
@@ -148,20 +157,34 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         await call('POST', '/v1/jobs', {
           capability: req.capability,
           offering: req.offering,
+          transport: req.transport,
           estimated_units: req.estimatedUnits,
           ...(req.maxTotalUnits !== undefined ? { max_total_units: req.maxTotalUnits } : {}),
-        }),
+        }, { 'Idempotency-Key': requireText(req.idempotencyKey, 'idempotency key') }),
       );
+      const protocol = requireText(raw['protocol'], 'protocol');
+      if (protocol !== 'paid-job/v1') {
+        throw invalidContract(`unsupported protocol ${protocol}`);
+      }
+      const transport = requireTransport(raw['transport']);
+      if (transport !== req.transport) {
+        throw invalidContract(`transport drift: requested ${req.transport}, received ${transport}`);
+      }
+      const brokerUrl = requireUrl(raw['broker_url'], 'broker_url');
+      const settleEndpoint = requireUrlOrPath(raw['settle_endpoint'], 'settle_endpoint');
       return {
-        jobId: str(raw['job_id']),
-        workId: str(raw['work_id']),
-        brokerUrl: str(raw['broker_url']),
-        mode: str(raw['mode']),
-        paymentEnvelope: str(raw['payment_envelope']),
-        expectedValueWei: str(raw['expected_value_wei']),
-        fundedValueWei: str(raw['funded_value_wei']),
-        settleEndpoint: str(raw['settle_endpoint']),
-        openedAt: str(raw['opened_at']),
+        jobId: requireText(raw['job_id'], 'job_id'),
+        requestId: requireText(raw['request_id'], 'request_id'),
+        workId: requireText(raw['work_id'], 'work_id'),
+        brokerUrl,
+        protocol,
+        transport,
+        workUnit: requireText(raw['work_unit'], 'work_unit'),
+        paymentEnvelope: requireText(raw['payment_envelope'], 'payment_envelope'),
+        expectedValueWei: requireUnsignedIntegerText(raw['expected_value_wei'], 'expected_value_wei'),
+        fundedValueWei: requireUnsignedIntegerText(raw['funded_value_wei'], 'funded_value_wei'),
+        settleEndpoint,
+        openedAt: requireText(raw['opened_at'], 'opened_at'),
       };
     },
 
@@ -249,6 +272,44 @@ function parseJobTransports(value: unknown): JobTransport[] {
     throw new Error('LOC capability contains an unsupported paid-job transport');
   }
   return value as JobTransport[];
+}
+
+function requireText(value: unknown, field: string): string {
+  const result = str(value).trim();
+  if (!result) throw invalidContract(`missing ${field}`);
+  return result;
+}
+
+function requireTransport(value: unknown): JobTransport {
+  if (value === 'unary' || value === 'stream' || value === 'multipart') return value;
+  throw invalidContract(`unsupported transport ${String(value)}`);
+}
+
+function requireUrl(value: unknown, field: string): string {
+  const result = requireText(value, field);
+  try {
+    const url = new URL(result);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('bad scheme');
+  } catch {
+    throw invalidContract(`invalid ${field}`);
+  }
+  return result;
+}
+
+function requireUrlOrPath(value: unknown, field: string): string {
+  const result = requireText(value, field);
+  if (result.startsWith('/')) return result;
+  return requireUrl(result, field);
+}
+
+function requireUnsignedIntegerText(value: unknown, field: string): string {
+  const result = requireText(value, field);
+  if (!/^\d+$/.test(result)) throw invalidContract(`invalid ${field}`);
+  return result;
+}
+
+function invalidContract(message: string): LocApiError {
+  return new LocApiError({ status: 502, code: 'loc_contract_invalid', message });
 }
 
 // ── error envelope parsing ──────────────────────────────────────────

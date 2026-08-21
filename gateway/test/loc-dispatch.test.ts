@@ -4,7 +4,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { dispatchReqresp, jobRefFromError } from '../src/loc/dispatch.js';
-import { LocApiError, type LocClient, type OpenJobResponse, type SettleJobRequest } from '../src/loc/client.js';
+import { LocApiError, type LocClient, type OpenJobRequest, type OpenJobResponse, type SettleJobRequest } from '../src/loc/client.js';
 import { LivepeerBrokerError } from '../src/proxy/livepeer/errors.js';
 
 interface BrokerRequest {
@@ -37,16 +37,18 @@ async function withMockBroker(
 
 interface FakeLocCalls {
   opens: number;
+  openRequests: OpenJobRequest[];
   settles: Array<{ jobId: string; req: SettleJobRequest }>;
 }
 
 function fakeLoc(
   openImpl: (call: number) => OpenJobResponse | LocApiError,
 ): { loc: LocClient; calls: FakeLocCalls } {
-  const calls: FakeLocCalls = { opens: 0, settles: [] };
+  const calls: FakeLocCalls = { opens: 0, openRequests: [], settles: [] };
   const loc: LocClient = {
-    async openJob() {
+    async openJob(req) {
       calls.opens += 1;
+      calls.openRequests.push(req);
       const out = openImpl(calls.opens);
       if (out instanceof LocApiError) throw out;
       return out;
@@ -79,12 +81,15 @@ function fakeLoc(
   return { loc, calls };
 }
 
-function job(brokerUrl: string, n: number, mode = 'http-reqresp@v0'): OpenJobResponse {
+function job(brokerUrl: string, n: number): OpenJobResponse {
   return {
     jobId: `job-${n}`,
+    requestId: `broker-request-${n}`,
     workId: `work-${n}`,
     brokerUrl,
-    mode,
+    protocol: 'paid-job/v1',
+    transport: 'unary',
+    workUnit: 'tokens',
     paymentEnvelope: `envelope-${n}`,
     expectedValueWei: '100',
     fundedValueWei: '100',
@@ -107,7 +112,15 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
     });
     assert.equal(calls.opens, 1);
     assert.equal(calls.settles.length, 0);
-    assert.deepEqual(out.jobRef, { jobId: 'job-1', workId: 'work-1' });
+    assert.deepEqual(out.jobRef, {
+      jobId: 'job-1',
+      requestId: 'broker-request-1',
+      workId: 'work-1',
+      protocol: 'paid-job/v1',
+      transport: 'unary',
+      workUnit: 'tokens',
+      settleEndpoint: '/v1/jobs/job-1/settle',
+    });
     assert.equal(out.candidate.brokerUrl, brokerUrl);
     assert.equal(out.candidate.model, 'llama-3');
     assert.equal(brokerRequests.length, 1);
@@ -115,29 +128,7 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
   });
 });
 
-test('mode mismatch: settles 0 and retries with a fresh job', async () => {
-  await withMockBroker(200, async (brokerUrl) => {
-    const { loc, calls } = fakeLoc((n) =>
-      n === 1 ? job(brokerUrl, 1, 'http-stream@v0') : job(brokerUrl, 2),
-    );
-    const out = await dispatchReqresp({
-      loc,
-      capability: 'c',
-      offering: 'o',
-      estimatedUnits: 1,
-      requestId: 'r',
-      body: null,
-    });
-    assert.equal(calls.opens, 2);
-    assert.equal(calls.settles.length, 1);
-    assert.equal(calls.settles[0]!.jobId, 'job-1');
-    assert.equal(calls.settles[0]!.req.actualUnits, 0);
-    assert.equal(calls.settles[0]!.req.outcome, 'mode_mismatch');
-    assert.equal(out.jobRef.jobId, 'job-2');
-  });
-});
-
-test('broker 5xx: retries with fresh jobs, settles intermediates, final error carries jobRef', async () => {
+test('broker 5xx does not create or compensate a fresh LOC job', async () => {
   await withMockBroker(500, async (brokerUrl) => {
     const { loc, calls } = fakeLoc((n) => job(brokerUrl, n));
     await assert.rejects(
@@ -153,16 +144,12 @@ test('broker 5xx: retries with fresh jobs, settles intermediates, final error ca
       (err: unknown) => {
         assert.ok(err instanceof LivepeerBrokerError);
         // Final job's ref is attached for the handler's durable settle.
-        assert.deepEqual(jobRefFromError(err), { jobId: 'job-3', workId: 'work-3' });
+        assert.equal(jobRefFromError(err)?.jobId, 'job-1');
         return true;
       },
     );
-    assert.equal(calls.opens, 3);
-    // Intermediate jobs (1, 2) settled inline; final job left to the handler.
-    assert.deepEqual(
-      calls.settles.map((s) => s.jobId),
-      ['job-1', 'job-2'],
-    );
+    assert.equal(calls.opens, 1);
+    assert.deepEqual(calls.settles, []);
   });
 });
 
@@ -227,4 +214,9 @@ test('LOC 5xx: retried up to maxJobAttempts', async () => {
     }),
   );
   assert.equal(calls.opens, 3);
+  assert.deepEqual(calls.openRequests, [
+    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
+    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
+    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
+  ]);
 });

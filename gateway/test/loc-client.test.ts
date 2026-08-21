@@ -48,9 +48,12 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
       status: 201,
       body: {
         job_id: 'job-1',
+        request_id: 'broker-request-1',
         work_id: 'work-1',
         broker_url: 'https://broker.example',
-        mode: 'http-reqresp@v0',
+        protocol: 'paid-job/v1',
+        transport: 'unary',
+        work_unit: 'tokens',
         payment_envelope: 'cGF5bWVudA==',
         expected_value_wei: 1000,
         funded_value_wei: 2000,
@@ -61,13 +64,18 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
     async (baseUrl, requests) => {
       const client = createLocClient({ baseUrl, apiKey: 'test-key', timeoutMs: 5000 });
       const job = await client.openJob({
+        idempotencyKey: 'gateway-operation-1',
         capability: 'openai:chat-completions',
         offering: 'llama-3',
+        transport: 'unary',
         estimatedUnits: 42,
       });
       assert.equal(job.jobId, 'job-1');
       assert.equal(job.brokerUrl, 'https://broker.example');
-      assert.equal(job.mode, 'http-reqresp@v0');
+      assert.equal(job.requestId, 'broker-request-1');
+      assert.equal(job.protocol, 'paid-job/v1');
+      assert.equal(job.transport, 'unary');
+      assert.equal(job.workUnit, 'tokens');
       assert.equal(job.paymentEnvelope, 'cGF5bWVudA==');
       assert.equal(job.expectedValueWei, '1000');
 
@@ -76,9 +84,11 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
       assert.equal(req.method, 'POST');
       assert.equal(req.url, '/v1/jobs');
       assert.equal(req.headers['x-api-key'], 'test-key');
+      assert.equal(req.headers['idempotency-key'], 'gateway-operation-1');
       assert.deepEqual(JSON.parse(req.body), {
         capability: 'openai:chat-completions',
         offering: 'llama-3',
+        transport: 'unary',
         estimated_units: 42,
       });
     },
@@ -94,12 +104,46 @@ test('error envelope {error:{code,message}} maps to LocApiError', async () => {
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
       await assert.rejects(
-        client.openJob({ capability: 'c', offering: 'o', estimatedUnits: 1 }),
+        client.openJob({ idempotencyKey: 'key', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }),
         (err: unknown) => {
           assert.ok(err instanceof LocApiError);
           assert.equal(err.status, 402);
           assert.equal(err.code, 'insufficient_credit');
           assert.equal(err.message, 'top up required');
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test('openJob rejects drift or missing identity in a successful LOC response', async () => {
+  await withMockLoc(
+    () => ({
+      status: 201,
+      body: {
+        job_id: 'job-1',
+        request_id: '',
+        work_id: 'work-1',
+        broker_url: 'https://broker.example',
+        protocol: 'paid-job/v1',
+        transport: 'stream',
+        work_unit: 'tokens',
+        payment_envelope: 'payment',
+        expected_value_wei: '1',
+        funded_value_wei: '1',
+        settle_endpoint: '/v1/jobs/job-1/settle',
+        opened_at: '2026-08-21T00:00:00Z',
+      },
+    }),
+    async (baseUrl) => {
+      const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
+      await assert.rejects(
+        client.openJob({ idempotencyKey: 'key', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }),
+        (err: unknown) => {
+          assert.ok(err instanceof LocApiError);
+          assert.equal(err.code, 'loc_contract_invalid');
+          assert.match(err.message, /transport drift/);
           return true;
         },
       );
