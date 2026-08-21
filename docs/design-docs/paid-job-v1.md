@@ -108,8 +108,10 @@ but is not a gateway release requirement.
 
 `DEBIT_FAILED` is an accounting fault, not successful settlement. The gateway
 records it, alerts it, and does not represent the LOC reservation as settled.
-The durable retry/exhaustion contract and LOC terminal behavior remain a
-release blocker; see “Open external contracts.”
+The broker durably retries the original debit identity while settlement lookup
+returns `202 accounting_pending`; only bounded exhaustion produces a signed
+`DEBIT_FAILED`. The reviewed default is 10 attempts over 30 minutes, both
+configurable. LOC rejects that outcome and keeps the reservation encumbered.
 
 ### Streaming remains non-buffering
 
@@ -170,7 +172,7 @@ reservation_open
 ```
 
 Accounting-only replay rejoins at `settlement_lookup_pending` and changes only
-the client-visible result. `accounting_pending`, if adopted upstream, remains
+the client-visible result. `accounting_pending` remains
 in settlement lookup. `DEBIT_FAILED`, invalid signed evidence, and
 never-admitted LOC jobs are explicit fault/recovery states; none may be folded
 into `settled` or silently converted to zero usage.
@@ -179,33 +181,44 @@ into `settled` or silently converted to zero usage.
 
 These block release, but not the independent catalog/client/schema retrofit:
 
-1. **Durable debit outcome.** Modules and LOC must define retrying debit,
-   nonterminal `accounting_pending`, bounded exhaustion, and LOC treatment of
-   signed `DEBIT_FAILED`. Coordination: `lmoa-3bv.2`, Modules `lnm-y08`.
-2. **Reservation without broker admission.** An assertion-based abandon or
+1. **Reservation without broker admission.** An assertion-based abandon or
    LOC-only timeout is unsafe because the already-issued envelope could still
-   be submitted after release. Modules and LOC must provide payer/payee
-   revocation, authoritative no-debit plus envelope expiry, or another proof
-   that makes the issued payment unspendable before LOC releases encumbrance.
-   Coordination: `lmoa-3bv.3`.
-3. **Transcription duration.** Modules must ship a universal seller-side
-   contract. Because runners are external to this gateway, the preferred
-   solution is `multipart-audio-duration`; a response header is acceptable
-   only if every eligible runner is normatively required to emit it.
-   Coordination: `lmoa-3bv.4`, Modules `lnm-4xh`.
+   be submitted after release. Modules now returns immutable
+   `creation_round` and `expires_after_round` values with each minted envelope;
+   chain expiry is the agreed unconditional proof of non-spendability. LOC's
+   reviewed working tree persists those values but does not yet query
+   authoritative current-round state or perform the idempotent post-expiry
+   release. Coordination: `lmoa-3bv.3`.
 
 The release gate pins immutable upstream revisions only after these contracts
 land. Pinning does not introduce a source dependency.
 
+## Resolved upstream contracts
+
+- **Durable debit outcome.** Modules `818430c` retains delivered-but-unsettled
+  jobs, reports `202 accounting_pending`, retries the same debit sequence, and
+  signs either the successful terminal result or `DEBIT_FAILED` after bounded
+  exhaustion. LOC `258b36e` rejects `DEBIT_FAILED` without settling or
+  releasing the reservation. Coordination bead `lmoa-3bv.2` is closed.
+- **Transcription duration.** Modules `12fa0db` ships the
+  `multipart-audio-duration` extractor for WAV, FLAC, MP4/M4A, Ogg, WebM, and
+  MP3. Exact duration rounds up to seconds. MP3 without Xing/Info or VBRI
+  metadata is an inexact CBR estimate and is refused by default unless the
+  offering explicitly enables `allow_inexact`. Coordination bead
+  `lmoa-3bv.4` is closed.
+
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed head `f34d2d5`, including
-  implementation response `dcb8cc8`, `paid-job` 1.0.7-draft, and the reported
-  39/39 signed broker conformance run.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `0acadd7` plus its active
-  v2 working tree. The working contract requires `Idempotency-Key`, returns
-  the layered job identities above, and verifies signed broker settlement at
-  `POST /v1/jobs/{id}/settle`.
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed head `c496fb4`, including
+  durable debit retry `818430c`, transcription extractor `12fa0db`, and payment
+  envelope expiry `c496fb4`. Local verification passed 39/39 protocol
+  conformance tests, 19/19 capability-broker smoke assertions, and the payment
+  daemon Go test suite.
+- LOC branch `tasks/lpm-v2`: reviewed committed head `94b9d0e` plus its active
+  expiry-integration working tree. Committed code rejects signed
+  `DEBIT_FAILED`; the working tree imports and persists the new envelope expiry
+  fields but does not yet implement authoritative round observation and
+  release.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 

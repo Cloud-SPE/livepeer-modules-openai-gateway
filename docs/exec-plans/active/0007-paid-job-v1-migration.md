@@ -52,11 +52,11 @@ Out of scope:
 - [x] Codify the accepted paid-job gateway contract (`lmoa-3bv.1`).
 - [x] Define claimed, debited, LOC-settled, and observed usage
   (`lmoa-3bv.5`).
-- [ ] Resolve durable debit retry and `DEBIT_FAILED` with Modules and LOC
+- [x] Resolve durable debit retry and `DEBIT_FAILED` with Modules and LOC
   (`lmoa-3bv.2`).
 - [ ] Resolve LOC reservations that never reach broker admission
   (`lmoa-3bv.3`).
-- [ ] Land transcription duration metering (`lmoa-3bv.4`).
+- [x] Land transcription duration metering (`lmoa-3bv.4`).
 - [ ] Pin release-ready upstream revisions (`lmoa-3bv.6`).
 
 ### Phase 2 — build the independent seam
@@ -150,3 +150,16 @@ for the unresolved financial terminal states.
 - **2026-08-21 — settlement 409 preserves evidence.**
   `job_already_settled` is terminal financial success after a lost LOC
   response, but the original signed claim remains stored as the audit record.
+- **2026-08-21 — bounded debit retry accepted.** Modules retains the payee
+  session and retries the original debit sequence while lookup returns
+  `accounting_pending`; 10 attempts over 30 minutes is an acceptable
+  configurable default. Signed `DEBIT_FAILED` remains a fault, and LOC keeps
+  the reservation encumbered.
+- **2026-08-21 — chain expiry is the never-admitted release authority.** The
+  payment daemon now returns `creation_round` and `expires_after_round`. The
+  remaining release blocker belongs at the LOC seam: observe authoritative
+  current round and idempotently release only when it is strictly greater than
+  the recorded expiry.
+- **2026-08-21 — transcription duration extractor accepted.** Use Modules'
+  `multipart-audio-duration`; keep inexact headerless MP3 estimation disabled
+  unless the product deliberately opts into estimated billing.
