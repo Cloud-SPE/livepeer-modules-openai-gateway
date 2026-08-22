@@ -7,8 +7,8 @@
 
 set -euo pipefail
 
-GATEWAY="${GATEWAY:-http://localhost:4000}"
-ADMIN_TOKEN="${ADMIN_TOKEN:-${SMOKE_ADMIN_TOKEN:-smoke-admin-token}}"
+GATEWAY="${GATEWAY:-http://127.0.0.1:4001}"
+ADMIN_TOKEN="${ADMIN_TOKEN:-${SMOKE_ADMIN_TOKEN:-}}"
 EMAIL="smoke+$(date +%s)@example.com"
 NAME="Smoke Tester"
 
@@ -29,16 +29,21 @@ section "health"
 status=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY/health")
 require_status 200 "$status" "GET /health"
 
+if [[ -z "$ADMIN_TOKEN" ]]; then
+  ADMIN_TOKEN=$(docker compose exec -T gateway printenv ADMIN_TOKEN 2>/dev/null || true)
+fi
+[[ -n "$ADMIN_TOKEN" ]] || fail "ADMIN_TOKEN is not configured in the gateway"
+
 # ── 1. /v1/models — non-empty registry-backed catalog ────────────
 section "catalog"
 body=$(curl -fsS "$GATEWAY/v1/models")
 echo "$body" | grep -q '"object":"list"' || fail "GET /v1/models response shape"
 model=$(docker compose exec -T db \
   psql -U "${POSTGRES_USER:-openai_service}" -d "${POSTGRES_DB:-openai_service}" \
-  -tAc "SELECT model_id FROM models WHERE active = true AND capability = 'openai:embeddings' ORDER BY snapshot_at DESC LIMIT 1;" | tr -d '[:space:]')
-[[ -n "$model" ]] || fail "no active embeddings model in models cache"
+  -tAc "SELECT model_id FROM models WHERE active = true AND capability = 'openai:chat-completions' ORDER BY snapshot_at DESC LIMIT 1;" | tr -d '[:space:]')
+[[ -n "$model" ]] || fail "no active chat-completions model in models cache"
 pass "GET /v1/models returns OpenAI catalog shape"
-pass "selected embeddings-capable model ($model)"
+pass "selected chat-completions model ($model)"
 
 # ── 2. signup ─────────────────────────────────────────────────────
 section "signup → verify → approve"
@@ -88,14 +93,16 @@ pass "GET /portal/account returns session user"
 
 # ── 6. /v1/* bearer auth ─────────────────────────────────────────
 section "/v1/* bearer auth"
-status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/v1/embeddings" \
-  -H "Content-Type: application/json" -d '{"model":"x","input":"hi"}')
-require_status 401 "$status" "POST /v1/embeddings without auth → 401"
+status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"default","messages":[{"role":"user","content":"Return the word smoke."}],"max_tokens":64}')
+require_status 401 "$status" "POST /v1/chat/completions without auth → 401"
 
-status=$(curl -s -o /tmp/smoke-emb.json -w "%{http_code}" -X POST "$GATEWAY/v1/embeddings" \
+status=$(curl -s -o /tmp/smoke-chat.json -w "%{http_code}" -X POST "$GATEWAY/v1/chat/completions" \
   -H "Authorization: Bearer $key" \
-  -H "Content-Type: application/json" -d "{\"model\":\"$model\",\"input\":\"hi\"}")
-require_status 200 "$status" "POST /v1/embeddings with valid key"
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Return the word smoke.\"}],\"max_tokens\":64}")
+require_status 200 "$status" "POST /v1/chat/completions with valid key"
 
 # ── 7. usage_reservations recorded the request ──────────────────
 recs=$(docker compose exec -T db \
