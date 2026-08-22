@@ -70,8 +70,8 @@ class CcUsage extends LitElement {
                           </button>`
                         : html`<span class="msg">—</span>`}
                     </td>
-                    <td><span class="pill ${r.state === 'committed' ? 'ok' : r.state === 'refunded' ? 'warn' : ''}">${r.state}</span></td>
-                    <td>${r.committedWorkUnits ?? html`<span class="msg">—</span>`}</td>
+                    <td>${renderAccountingState(r)}</td>
+                    <td>${r.brokerActualUnits ?? r.committedWorkUnits ?? html`<span class="msg">—</span>`} ${r.selectedWorkUnit ?? ''}</td>
                     <td>${r.statusCode ?? ''}</td>
                     <td>${r.latencyMs != null ? `${r.latencyMs}ms` : ''}</td>
                   </tr>`,
@@ -93,6 +93,23 @@ class CcUsage extends LitElement {
       workUnit: row.selectedWorkUnit ?? '—',
       unitsPerPrice: row.unitsPerPrice ?? '—',
       estimatedWorkUnits: row.estimatedWorkUnits ?? '—',
+      protocol: row.jobProtocol ?? '—',
+      transport: row.jobTransport ?? '—',
+      locJobId: row.locJobId ?? '—',
+      requestId: row.locRequestId ?? '—',
+      paymentWorkId: row.paymentWorkId ?? '—',
+      brokerJobId: row.brokerJobId ?? '—',
+      lookupState: row.settlementLookupState ?? '—',
+      lookupAttempts: row.settlementLookupAttempts ?? 0,
+      lookupError: row.settlementLookupLastError ?? '—',
+      gatewayObserved: row.gatewayObservedUnits ?? '—',
+      brokerActual: row.brokerActualUnits ?? '—',
+      brokerDebited: row.brokerDebitedUnits ?? '—',
+      brokerOutcome: row.brokerSettlementOutcome ?? '—',
+      locSettled: row.locSettledUnits ?? '—',
+      locOutcome: row.locSettlementOutcome ?? '—',
+      settleState: row.settleState ?? '—',
+      terminalEvidence: row.terminalEvidenceType ?? '—',
     };
     window.addEventListener('keydown', this.#handleKeydown);
   }
@@ -124,6 +141,19 @@ class CcUsage extends LitElement {
             <div><span class="msg">work unit</span><code>${route.workUnit}</code></div>
             <div><span class="msg">units/price</span><code>${route.unitsPerPrice}</code></div>
             <div><span class="msg">estimated</span><code>${route.estimatedWorkUnits}</code></div>
+            <div><span class="msg">protocol / transport</span><code>${route.protocol} / ${route.transport}</code></div>
+            <div><span class="msg">LOC job</span><code>${route.locJobId}</code></div>
+            <div><span class="msg">request ID</span><code>${route.requestId}</code></div>
+            <div><span class="msg">payment work ID</span><code>${route.paymentWorkId}</code></div>
+            <div><span class="msg">broker job</span><code>${route.brokerJobId}</code></div>
+            <div><span class="msg">lookup</span><code>${route.lookupState} (${route.lookupAttempts})</code></div>
+            ${route.lookupError !== '—' ? html`<div><span class="msg">lookup error</span><code>${route.lookupError}</code></div>` : ''}
+            <div><span class="msg">gateway observed</span><code>${route.gatewayObserved}</code></div>
+            <div><span class="msg">broker actual / debited</span><code>${route.brokerActual} / ${route.brokerDebited}</code></div>
+            <div><span class="msg">broker outcome</span><code>${route.brokerOutcome}</code></div>
+            <div><span class="msg">LOC settled</span><code>${route.locSettled} (${route.locOutcome})</code></div>
+            <div><span class="msg">settlement</span><code>${route.settleState}</code></div>
+            <div><span class="msg">terminal evidence</span><code>${route.terminalEvidence}</code></div>
           </div>
         </div>
       </div>
@@ -132,7 +162,17 @@ class CcUsage extends LitElement {
 }
 
 function hasRouteDetails(row) {
-  return Boolean(row.quoteId || row.selectedOffering || row.brokerUrl || row.ethAddress);
+  return Boolean(row.selectedOffering || row.brokerUrl || row.locRequestId || row.brokerJobId);
+}
+
+function renderAccountingState(row) {
+  const state = row.settlementLookupState === 'accounting_pending'
+    ? 'accounting pending'
+    : row.settleState ?? row.settlementLookupState ?? row.state;
+  const tone = state === 'settled' || state === 'ready' ? 'ok'
+    : state === 'failed' || state === 'not_admitted' || state === 'evidence_expired' ? 'warn'
+    : '';
+  return html`<span class="pill ${tone}">${state}</span>`;
 }
 
 customElements.define('cc-usage', CcUsage);

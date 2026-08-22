@@ -539,6 +539,26 @@ export async function listByApiKey(
     .offset(offset);
 }
 
+export interface UsageReservationWithOwner {
+  reservation: UsageReservation;
+  email: string;
+}
+
+/** Recent request-level diagnostics for operators. Signed envelopes and
+ * payment credentials are intentionally not selected by API mappers. */
+export async function listRecentWithOwner(
+  db: Db,
+  limit = 100,
+): Promise<UsageReservationWithOwner[]> {
+  return await db
+    .select({ reservation: usageReservations, email: waitlist.email })
+    .from(usageReservations)
+    .innerJoin(apiKeys, eq(usageReservations.apiKeyId, apiKeys.id))
+    .innerJoin(waitlist, eq(apiKeys.waitlistId, waitlist.id))
+    .orderBy(desc(usageReservations.createdAt))
+    .limit(limit);
+}
+
 export interface UsageSummary {
   apiKeyId: string;
   email: string;

@@ -94,6 +94,40 @@ export async function registerUsageRoutes(
           constraintFingerprintHex: r.constraintFingerprintHex,
           routeFingerprintHex: r.routeFingerprintHex,
           estimatedWorkUnits: r.estimatedWorkUnits,
+          locJobId: r.locJobId,
+          locRequestId: r.locRequestId,
+          paymentWorkId: r.paymentWorkId,
+          brokerJobId: r.brokerJobId,
+          jobProtocol: r.jobProtocol as 'paid-job/v1' | null,
+          jobTransport: r.jobTransport as 'unary' | 'stream' | 'multipart' | null,
+          settlementLookupState: r.settlementLookupState as
+            | 'pending'
+            | 'accounting_pending'
+            | 'in_flight'
+            | 'ready'
+            | 'not_admitted'
+            | 'no_record'
+            | 'evidence_expired'
+            | 'failed'
+            | null,
+          settlementLookupAttempts: r.settlementLookupAttempts,
+          settlementLookupLastError: r.settlementLookupLastError,
+          brokerActualUnits: r.brokerActualUnits,
+          brokerDebitedUnits: r.brokerDebitedUnits,
+          brokerBilledValueWei: r.brokerBilledValueWei,
+          brokerSettlementOutcome: r.brokerSettlementOutcome,
+          gatewayObservedUnits: r.gatewayObservedUnits,
+          gatewayObservationSource: r.gatewayObservationSource,
+          locSettledUnits: r.locSettledUnits,
+          locBilledValueWei: r.locBilledValueWei,
+          locSettlementOutcome: r.locSettlementOutcome,
+          settleState: r.settleState as 'pending' | 'settled' | 'failed' | null,
+          settleAttempts: r.settleAttempts,
+          terminalEvidenceType: r.terminalEvidenceType as
+            | 'not_admitted'
+            | 'evidence_expired'
+            | 'debit_failed'
+            | null,
           state: r.state as 'open' | 'committed' | 'refunded',
           committedWorkUnits: r.committedWorkUnits,
           latencyMs: r.latencyMs,
