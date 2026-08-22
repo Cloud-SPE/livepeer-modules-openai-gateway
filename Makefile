@@ -71,8 +71,7 @@ smoke:
 	./scripts/smoke.sh
 
 loc-smoke:
-	@set -a; [ ! -f .env ] || . ./.env; set +a; \
-	credential=../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json; \
+	@credential=../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json; \
 	if [ -f "$$credential" ]; then \
 		export LOC_BASE_URL=http://127.0.0.1:8088; \
 		export LOC_API_KEY=$$(jq -er '.api_key' "$$credential"); \
