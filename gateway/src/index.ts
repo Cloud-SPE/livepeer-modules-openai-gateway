@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     db,
     loc,
     intervalMs: config.locSettleIntervalMs,
-    maxAttempts: config.locSettleMaxAttempts,
+    alertAttempts: config.locSettleAlertAttempts,
     log: app.log,
   });
   const cancelSettlementLookup = startSettlementLookup({

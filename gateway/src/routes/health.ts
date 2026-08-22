@@ -9,7 +9,7 @@
 //   - LOC clearinghouse (route selection + payment minting)
 //
 // `pendingSettlements` is informational: a growing backlog means the
-// settler can't reach LOC (refunds are delayed, not lost), but it does
+// settler can't reach LOC (signed settlement is delayed, not lost), but it does
 // not flip the gateway to down on its own.
 
 import { sql } from 'drizzle-orm';

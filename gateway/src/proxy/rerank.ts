@@ -78,7 +78,7 @@ export async function registerRerankRoute(
           offering,
           estimatedUnits: 1,
           maxTotalUnits: 1,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
           idempotencyKey: handle.workId,

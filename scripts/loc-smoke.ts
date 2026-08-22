@@ -1,108 +1,138 @@
-// Manual smoke test against a live LOC clearinghouse.
+// Real paid-job/v1 smoke against LOC and its selected broker.
 //
-// Opens a tiny 1-unit job and immediately settles it with 0 units, so
-// the only cost is transient: the estimate's expected value is charged
-// at open and refunded in full at settle.
-//
-// Usage:
-//   LOC_BASE_URL=https://loc.cloudspe.com LOC_API_KEY=... \
-//     pnpm exec tsx scripts/loc-smoke.ts
-// or: make loc-smoke (reads the same env / .env values)
+// This performs a paid exchange: idempotent LOC open, broker execution,
+// signed settlement retrieval, and signed LOC settlement. It never fabricates
+// zero usage and never submits unsigned evidence.
 
-import { createLocClient, LocApiError } from '../gateway/src/loc/client.js';
+import { randomUUID } from 'node:crypto';
 
-const baseUrl = process.env['LOC_BASE_URL'] ?? 'https://loc.cloudspe.com';
-const apiKey = process.env['LOC_API_KEY'];
+import {
+  createLocClient,
+  LocApiError,
+  type SettlementEnvelope,
+} from '../gateway/src/loc/client.js';
+import { dispatchReqresp } from '../gateway/src/loc/dispatch.js';
+import { lookupBrokerSettlement } from '../gateway/src/loc/brokerSettlement.js';
 
-function fail(msg: string): never {
-  console.error(`✗ ${msg}`);
+const baseUrl = requiredEnv('LOC_BASE_URL');
+const apiKey = requiredEnv('LOC_API_KEY');
+const capability = process.env['LOC_SMOKE_CAPABILITY'] ?? 'openai:chat-completions';
+const offering = process.env['LOC_SMOKE_OFFERING'] ?? 'default';
+const lookupAttempts = positiveIntEnv('LOC_SMOKE_LOOKUP_ATTEMPTS', 60);
+
+function fail(message: string): never {
+  console.error(`✗ ${message}`);
   process.exit(1);
 }
 
-function pass(msg: string): void {
-  console.log(`✓ ${msg}`);
+function pass(message: string): void {
+  console.log(`✓ ${message}`);
 }
 
 async function main(): Promise<void> {
-  if (!apiKey) fail('LOC_API_KEY is not set');
-
-  const loc = createLocClient({ baseUrl, apiKey, timeoutMs: 15000 });
-
-  // ── 1. health ─────────────────────────────────────────────────
+  const loc = createLocClient({ baseUrl, apiKey, timeoutMs: 15_000 });
   const health = await loc.health();
   if (health.status !== 'ok') fail(`LOC health status: ${health.status}`);
-  pass(`health ok — version ${health.version}, env ${health.env}`);
+  pass(`LOC health ok — version ${health.version}, env ${health.env}`);
 
-  // ── 2. balance (soft — the deployed LOC gates this behind the
-  //      portal session cookie, not the API key) ─────────────────
-  try {
-    const balance = await loc.getBalance();
-    pass(`balance: ${balance.amountWei} wei`);
-  } catch (err) {
-    if (err instanceof LocApiError && err.status === 401) {
-      console.log(`- balance: skipped (requires portal session, got 401)`);
-    } else {
-      throw err;
-    }
-  }
-
-  // ── 3. capabilities ───────────────────────────────────────────
   const capabilities = await loc.listCapabilities();
-  const offerings = capabilities.flatMap((c) =>
-    c.offerings.map((o) => ({ capability: c.name, offering: o.id })),
-  );
-  if (offerings.length === 0) fail('no capabilities/offerings advertised');
-  pass(
-    `capabilities: ${capabilities.length} (${offerings.length} offerings) — ` +
-      capabilities
-        .slice(0, 3)
-        .map((c) => c.name)
-        .join(', '),
-  );
+  const selected = capabilities
+    .find((item) => item.name === capability)
+    ?.offerings.find((item) => item.id === offering);
+  if (!selected) fail(`catalog does not advertise ${capability}/${offering}`);
+  if (selected.protocol !== 'paid-job/v1') {
+    fail(`catalog protocol is ${selected.protocol || '<missing>'}, expected paid-job/v1`);
+  }
+  if (!selected.transports.includes('unary')) {
+    fail(`${capability}/${offering} does not advertise unary transport`);
+  }
+  pass(`catalog advertises ${capability}/${offering} as paid-job/v1 unary`);
 
-  // ── 4. open a 1-unit job ──────────────────────────────────────
-  const target = offerings[0]!;
-  let job;
-  try {
-    job = await loc.openJob({
-      capability: target.capability,
-      offering: target.offering,
-      estimatedUnits: 1,
-    });
-  } catch (err) {
-    if (err instanceof LocApiError) {
-      fail(`openJob ${target.capability}/${target.offering}: ${err.code} — ${err.message}`);
-    }
-    throw err;
+  const dispatched = await dispatchReqresp({
+    loc,
+    capability,
+    offering,
+    estimatedUnits: 64,
+    maxTotalUnits: 256,
+    idempotencyKey: randomUUID(),
+    maxJobAttempts: 3,
+    body: JSON.stringify({
+      model: offering,
+      messages: [{ role: 'user', content: 'Return the word smoke.' }],
+      max_tokens: 64,
+    }),
+    contentType: 'application/json',
+  });
+  if (dispatched.result.status < 200 || dispatched.result.status >= 300) {
+    fail(`broker returned HTTP ${dispatched.result.status}`);
   }
   pass(
-    `opened job ${job.jobId} (${target.capability}/${target.offering}, mode ${job.mode}, ` +
-      `broker ${job.brokerUrl}, EV ${job.expectedValueWei} wei)`,
+    `broker admitted ${dispatched.jobRef.brokerJobId} for LOC job ${dispatched.jobRef.jobId}`,
   );
 
-  // ── 5. settle with 0 units (full refund) ──────────────────────
-  const settled = await loc.settleJob(job.jobId, { actualUnits: 0, outcome: 'smoke' });
-  pass(`settled job ${job.jobId}: billed ${settled.billedValueWei} wei, refund ${settled.refundWei} wei`);
-
-  // ── 6. balance after round trip (soft, see step 2) ────────────
-  try {
-    const after = await loc.getBalance();
-    pass(`balance after: ${after.amountWei} wei`);
-  } catch (err) {
-    if (err instanceof LocApiError && err.status === 401) {
-      console.log(`- balance after: skipped (requires portal session, got 401)`);
-    } else {
-      throw err;
-    }
-  }
-
-  console.log('\nLOC smoke: all checks passed.');
+  const evidence = await waitForEvidence(dispatched.jobRef);
+  const actualUnits = Number(evidence.actualUnits);
+  if (!Number.isSafeInteger(actualUnits)) fail('signed actual units exceed the gateway safe range');
+  const settled = await loc.settleJob(dispatched.jobRef.jobId, {
+    actualUnits,
+    brokerJobId: evidence.brokerJobId,
+    workUnit: evidence.workUnit,
+    outcome: evidence.outcome,
+    settlement: evidence.envelope as unknown as SettlementEnvelope,
+  });
+  pass(
+    `LOC settled signed ${evidence.outcome}: actual=${settled.actualUnits} ` +
+      `${evidence.workUnit}, billed=${settled.billedValueWei} wei, refund=${settled.refundWei} wei`,
+  );
 }
 
-main().catch((err) => {
-  if (err instanceof LocApiError) {
-    fail(`LOC error ${err.status} ${err.code}: ${err.message}`);
+async function waitForEvidence(job: {
+  brokerUrl: string;
+  brokerJobId: string;
+  requestId: string;
+  workId: string;
+  workUnit: string;
+}) {
+  for (let attempt = 1; attempt <= lookupAttempts; attempt++) {
+    const result = await lookupBrokerSettlement(
+      {
+        id: 'smoke',
+        brokerUrl: job.brokerUrl,
+        brokerJobId: job.brokerJobId,
+        locRequestId: job.requestId,
+        paymentWorkId: job.workId,
+        workUnit: job.workUnit,
+        attempts: attempt - 1,
+      },
+      15_000,
+    );
+    if (result.kind === 'evidence') return result.evidence;
+    if (result.kind === 'terminal_evidence') {
+      fail(`broker returned ${result.state}: ${result.detail}`);
+    }
+    if (attempt < lookupAttempts) await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  console.error(err);
+  return fail(`signed settlement did not become available after ${lookupAttempts} attempts`);
+}
+
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  return value || fail(`${name} is not set`);
+}
+
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0
+    ? value
+    : fail(`${name} must be a positive integer`);
+}
+
+main().catch((error) => {
+  if (error instanceof LocApiError) {
+    fail(`LOC error ${error.status} ${error.code}: ${error.message}`);
+  }
+  console.error(error);
   process.exit(1);
 });

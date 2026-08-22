@@ -1,9 +1,9 @@
-// Background settler: drains the durable settle queue written by
-// reservation commit/refund (usage_reservations.settle_state='pending')
+// Background settler: drains the durable queue after signed broker evidence
+// is persisted (usage_reservations.settle_state='pending')
 // against LOC's POST /v1/jobs/{id}/settle.
 //
-// LOC charges the full estimate at job issuance. Settlement requires
-// the original signed broker claim persisted by the lookup worker.
+// LOC encumbers the funded ceiling at job issuance. Settlement requires the
+// original signed broker claim persisted by the lookup worker.
 // Transient failures retry without a finite abandonment ceiling. A 409
 // job_already_settled is success after a lost response; 404 is a
 // permanent reconciliation failure, never a successful settlement.
@@ -19,7 +19,7 @@ export interface StartSettlerInput {
   db: Db;
   loc: LocClient;
   intervalMs: number;
-  maxAttempts: number;
+  alertAttempts: number;
   batchSize?: number;
   log: FastifyBaseLogger | Console;
 }
@@ -30,7 +30,7 @@ export type CancelSettler = () => void;
 const DEFAULT_BATCH_SIZE = 50;
 
 export function startSettler(input: StartSettlerInput): CancelSettler {
-  const { db, loc, intervalMs, maxAttempts, log } = input;
+  const { db, loc, intervalMs, alertAttempts, log } = input;
   const batchSize = input.batchSize ?? DEFAULT_BATCH_SIZE;
 
   // Guard against overlapping runs when a batch outlives the interval.
@@ -39,7 +39,7 @@ export function startSettler(input: StartSettlerInput): CancelSettler {
     if (running) return;
     running = true;
     try {
-      const stats = await runSettleOnce(db, loc, maxAttempts, batchSize);
+      const stats = await runSettleOnce(db, loc, alertAttempts, batchSize);
       if (stats.settled + stats.failed + stats.retried > 0) {
         log.info(stats, 'LOC settle pass');
       }
@@ -90,7 +90,7 @@ function dbStore(db: Db): SettleStore {
 export async function runSettleOnce(
   db: Db | SettleStore,
   loc: LocClient,
-  maxAttempts: number,
+  alertAttempts: number,
   batchSize: number,
 ): Promise<SettlePassStats> {
   const store: SettleStore =
@@ -126,7 +126,7 @@ export async function runSettleOnce(
       } else {
         stats.retried += 1;
         proxySettleTotal.inc({
-          outcome: row.settleAttempts + 1 >= maxAttempts ? 'retry_alert' : 'retried',
+          outcome: row.settleAttempts + 1 >= alertAttempts ? 'retry_alert' : 'retried',
         });
       }
     }

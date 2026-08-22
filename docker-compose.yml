@@ -5,7 +5,7 @@
 #   - gateway   (build from ./gateway/Dockerfile)
 #
 # Route selection + payment minting are delegated to the LOC
-# (Livepeer Open Clearinghouse) over HTTPS — no daemon sidecars or
+# (Livepeer Open Clearinghouse) over HTTP — no daemon sidecars or
 # unix-socket volumes. Set LOC_BASE_URL + LOC_API_KEY in .env.
 #
 # Capability workers are external to this repository and compose stack.
@@ -29,7 +29,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+    restart: "no"
   gateway:
     build:
       context: .
@@ -43,6 +43,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # ── server ──
       PORT: "4001"
@@ -69,12 +71,12 @@ services:
       FROM_EMAIL: ${FROM_EMAIL:-OpenAI Service <noreply@example.com>}
 
       # ── LOC clearinghouse ──
-      LOC_BASE_URL: ${LOC_BASE_URL:-https://loc.cloudspe.com}
+      LOC_BASE_URL: ${LOC_BASE_URL:-http://host.docker.internal:8000}
       LOC_API_KEY: ${LOC_API_KEY:-}
       LOC_TIMEOUT_MS: ${LOC_TIMEOUT_MS:-30000}
       LOC_SETTLE_INTERVAL_MS: ${LOC_SETTLE_INTERVAL_MS:-15000}
-      LOC_SETTLE_MAX_ATTEMPTS: ${LOC_SETTLE_MAX_ATTEMPTS:-20}
-      LOC_JOB_RETRIES: ${LOC_JOB_RETRIES:-2}
+      LOC_SETTLE_ALERT_ATTEMPTS: ${LOC_SETTLE_ALERT_ATTEMPTS:-20}
+      LOC_OPEN_MAX_ATTEMPTS: ${LOC_OPEN_MAX_ATTEMPTS:-3}
       LOC_MODEL_MAP: ${LOC_MODEL_MAP:-{}}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
 
@@ -83,7 +85,7 @@ services:
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
     ports:
       - "${GATEWAY_HOST_PORT:-4001}:4001"
-    restart: unless-stopped
+    restart: "no"
 
 volumes:
   openai-service-pgdata:

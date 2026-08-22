@@ -2,9 +2,9 @@
 //
 // The LOC fronts the service-registry and payer daemons: POST /v1/jobs
 // selects a route AND mints the payment envelope in one call; the
-// envelope goes verbatim into the `Livepeer-Payment` header. Jobs are
-// charged at issuance for the full estimate — settling with actual
-// units afterwards is what claws back the difference (see settler.ts).
+// envelope goes verbatim into the `Livepeer-Payment` header. The envelope
+// funds a bounded exchange; only signed broker evidence authorizes final
+// LOC accounting (see settler.ts).
 
 export interface LocClientConfig {
   baseUrl: string;

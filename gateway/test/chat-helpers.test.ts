@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   chatFunding,
-  parseTotalTokens,
   pickModel,
 } from '../src/proxy/chat.js';
 import { textCodePoints } from '../src/proxy/audio-speech.js';
@@ -87,25 +86,3 @@ function wavPcm(sampleRate: number, samples: number): Buffer {
   out.writeUInt32LE(dataSize, 40);
   return out;
 }
-
-describe('parseTotalTokens', () => {
-  it('extracts usage.total_tokens from a string body', () => {
-    const body = JSON.stringify({ id: 'x', usage: { total_tokens: 42 } });
-    assert.equal(parseTotalTokens(body), 42);
-  });
-  it('extracts from a Uint8Array body', () => {
-    const body = new TextEncoder().encode(
-      JSON.stringify({ usage: { total_tokens: 7 } }),
-    );
-    assert.equal(parseTotalTokens(body), 7);
-  });
-  it('returns null on malformed JSON', () => {
-    assert.equal(parseTotalTokens('not json'), null);
-  });
-  it('returns null when usage.total_tokens missing', () => {
-    assert.equal(parseTotalTokens(JSON.stringify({ id: 'x' })), null);
-  });
-  it('returns null for non-string non-buffer inputs', () => {
-    assert.equal(parseTotalTokens(null), null);
-  });
-});

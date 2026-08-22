@@ -25,7 +25,7 @@ help:
 	@echo "  make down        tear down dev compose stack"
 	@echo "  make logs        tail dev compose logs"
 	@echo "  make smoke       end-to-end smoke test against the dev stack"
-	@echo "  make loc-smoke   open + settle a 1-unit job against the live LOC"
+	@echo "  make loc-smoke   execute and settle a signed paid-job/v1 exchange"
 	@echo "                    (requires LOC_API_KEY; LOC_BASE_URL optional)"
 	@echo "  make web         start site + portal + admin dev servers"
 	@echo "  make site-ui     start the site dev server (:3000)"
@@ -52,7 +52,7 @@ test:
 	pnpm -r test
 
 dev:
-	docker compose up -d
+	docker compose up
 
 down:
 	docker compose down
@@ -64,6 +64,7 @@ smoke:
 	./scripts/smoke.sh
 
 loc-smoke:
+	@set -a; [ ! -f .env ] || . ./.env; set +a; \
 	cd gateway && pnpm exec tsx ../scripts/loc-smoke.ts
 
 web:
@@ -94,7 +95,9 @@ clean:
 # Requires `docker login docker.io` first; refuses to push :dev.
 
 docker-build:
-	docker build -t $(IMAGE):$(TAG) -f gateway/Dockerfile .
+	docker build \
+		--build-context audio_duration=../livepeer-network-modules/packages/audio-duration \
+		-t $(IMAGE):$(TAG) -f gateway/Dockerfile .
 	@echo "built $(IMAGE):$(TAG)"
 
 docker-publish:
@@ -108,6 +111,7 @@ docker-publish:
 		docker buildx create --name multiarch --driver docker-container --bootstrap
 	docker buildx build --builder multiarch \
 		--platform linux/amd64,linux/arm64 \
+		--build-context audio_duration=../livepeer-network-modules/packages/audio-duration \
 		--push \
 		-t $(IMAGE):$(TAG) \
 		-t $(IMAGE):latest \

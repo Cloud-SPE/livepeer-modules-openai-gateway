@@ -123,7 +123,7 @@ export async function registerAudioTranscriptionsRoute(
           offering,
           estimatedUnits: ceilingSeconds,
           maxTotalUnits: ceilingSeconds,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body,
           contentType,
           idempotencyKey: handle.workId,

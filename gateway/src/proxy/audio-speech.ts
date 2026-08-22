@@ -75,7 +75,7 @@ export async function registerAudioSpeechRoute(
           offering,
           estimatedUnits,
           maxTotalUnits: estimatedUnits,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
           idempotencyKey: handle.workId,

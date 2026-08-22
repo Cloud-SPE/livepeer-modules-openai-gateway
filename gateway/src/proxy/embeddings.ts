@@ -74,16 +74,15 @@ export async function registerEmbeddingsRoute(
           offering,
           estimatedUnits: funding.estimatedUnits,
           maxTotalUnits: funding.maxTotalUnits,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
           idempotencyKey: handle.workId,
           onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
-        const usage = parseUsage(dispatched.result.body);
         await commitReservation(deps, handle, {
-          workUnits: usage,
+          workUnits: null,
           statusCode: dispatched.result.status,
         });
         await reply
@@ -102,20 +101,6 @@ export async function registerEmbeddingsRoute(
       }
     },
   );
-}
-
-function parseUsage(body: BodyInit | null): number | null {
-  // http-reqresp returns the broker body as an ArrayBuffer.
-  if (typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer)) {
-    return null;
-  }
-  try {
-    const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
-    const parsed = JSON.parse(text) as { usage?: { total_tokens?: number } };
-    return typeof parsed?.usage?.total_tokens === 'number' ? parsed.usage.total_tokens : null;
-  } catch {
-    return null;
-  }
 }
 
 function estimateEmbeddingUnits(input: unknown): number {

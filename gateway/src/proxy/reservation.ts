@@ -1,10 +1,6 @@
-// Reservation lifecycle helpers. Each /v1/* route calls these around
-// its dispatch — open → dispatch → commit | refund.
-//
-// In v1 there's no billing math: open writes state='open', commit writes
-// state='committed' with observed work_units, refund writes
-// state='refunded' with the error text. Forward-compat with future
-// billing: the state machine + numeric fields are already in the schema.
+// Gateway request-observation lifecycle. Each /v1/* route records open,
+// dispatch, and the customer-visible outcome. These rows are operational
+// telemetry only; signed broker evidence is the sole LOC accounting input.
 
 import { randomUUID } from 'node:crypto';
 

@@ -99,16 +99,15 @@ export async function registerChatRoute(
           offering,
           estimatedUnits: funding.estimatedUnits,
           maxTotalUnits: funding.maxTotalUnits,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: bodyStr,
           contentType: 'application/json',
           idempotencyKey: handle.workId,
           onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
-        const usage = parseTotalTokens(dispatched.result.body);
         await commitReservation(deps, handle, {
-          workUnits: usage,
+          workUnits: null,
           statusCode: dispatched.result.status,
         });
         await reply
@@ -153,7 +152,7 @@ async function runStreaming(
       offering: input.offering,
       estimatedUnits: input.estimatedUnits,
       maxTotalUnits: input.maxTotalUnits,
-      maxJobAttempts: deps.config.locJobRetries + 1,
+      maxJobAttempts: deps.config.locOpenMaxAttempts,
       body: input.bodyStr,
       contentType: 'application/json',
       idempotencyKey: input.handle.workId,
@@ -215,21 +214,6 @@ async function runStreaming(
 
 export function pickModel(body: ChatCompletionsBody): string | null {
   return typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
-}
-
-export function parseTotalTokens(body: BodyInit | null): number | null {
-  // http-reqresp returns the broker body as an ArrayBuffer.
-  if (typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer)) {
-    return null;
-  }
-  try {
-    const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
-    const parsed = JSON.parse(text) as { usage?: { total_tokens?: number } };
-    const total = parsed?.usage?.total_tokens;
-    return typeof total === 'number' ? total : null;
-  } catch {
-    return null;
-  }
 }
 
 function estimatedChatWorkUnits(body: ChatCompletionsBody): number {

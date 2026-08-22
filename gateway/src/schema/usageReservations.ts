@@ -15,12 +15,9 @@ import {
 
 import { apiKeys } from './apiKeys.js';
 
-// One row per /v1/* proxy request. Mirrors the same reservation model
-// even though v1 has no billing — the state machine stays for forward
-// compatibility (and so the admin UI can show ok/error/refunded outcomes).
-//
-// While billing is off: success → state='committed'; broker failure →
-// state='refunded'. reserved == committed == observed usage; no math.
+// One row per /v1/* proxy request. The open/committed/refunded state is the
+// customer-visible gateway outcome used by admin reporting; it is deliberately
+// separate from broker evidence and LOC settlement state below.
 
 export const usageReservations = pgTable(
   'usage_reservations',
@@ -52,9 +49,9 @@ export const usageReservations = pgTable(
     state: text('state').notNull().default('open'),
 
     // ── LOC settlement (durable async) ────────────────────────────
-    // Written at commit/refund time; the background settler retries
-    // POST /v1/jobs/{loc_job_id}/settle until LOC acks (409
-    // job_already_settled counts as settled).
+    // Set to pending only after signed broker evidence is durable. The
+    // background settler retries POST /v1/jobs/{loc_job_id}/settle until
+    // LOC acks (409 job_already_settled counts as settled).
     locJobId: text('loc_job_id'),
     // Five identities remain deliberately distinct. `workId` above is
     // this gateway's operation id; these bind the LOC open, payment,
