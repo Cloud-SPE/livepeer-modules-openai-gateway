@@ -479,3 +479,31 @@ test('LOC timeout retries preserve the identical idempotency key and content', a
   assert.equal(new Set(calls.openRequests.map((request) => JSON.stringify(request))).size, 1);
   assert.equal(calls.openRequests[0]!.idempotencyKey, 'stable-operation');
 });
+
+test('LOC in-progress replay is retried identically and may converge', async () => {
+  const { loc, calls } = fakeLoc((attempt) => {
+    if (attempt < 3) {
+      return new LocApiError({
+        status: 409,
+        code: 'IDEMPOTENCY_IN_PROGRESS',
+        message: 'mint is still in flight',
+      });
+    }
+    return job('http://127.0.0.1:1', attempt);
+  });
+  await assert.rejects(
+    dispatchReqresp({
+      loc,
+      capability: 'c',
+      offering: 'o',
+      estimatedUnits: 9,
+      idempotencyKey: 'stable-in-flight-operation',
+      maxJobAttempts: 3,
+      body: null,
+    }),
+    /fetch failed|ECONNREFUSED/,
+  );
+  assert.equal(calls.opens, 3);
+  assert.equal(new Set(calls.openRequests.map((request) => JSON.stringify(request))).size, 1);
+  assert.equal(calls.openRequests[0]!.idempotencyKey, 'stable-in-flight-operation');
+});

@@ -86,6 +86,7 @@ interface StreamDispatch extends DispatchCommon {
 }
 
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
+const JOB_OPEN_RETRY_BASE_MS = 250;
 
 export async function dispatchReqresp(opts: ReqRespDispatch): Promise<DispatchSuccess<httpReqresp.SendResult>> {
   return attemptJob(opts, 'unary', async (job) =>
@@ -163,6 +164,9 @@ async function attemptJob<T extends {
     } catch (err) {
       lastError = err;
       if (!shouldRetryJobOpen(err)) throw err;
+      if (attempt + 1 < maxAttempts) {
+        await delay(JOB_OPEN_RETRY_BASE_MS * 2 ** attempt);
+      }
     }
   }
   if (!job) throw lastError ?? new Error(`LOC open failed for ${opts.capability}/${opts.offering}`);
@@ -267,9 +271,14 @@ function candidateFromJob(
 
 function shouldRetryJobOpen(err: unknown): boolean {
   if (!(err instanceof LocApiError)) return false;
+  if (err.status === 409 && err.code === 'IDEMPOTENCY_IN_PROGRESS') return true;
   // 402 insufficient_credit / 404 no_route_available are deterministic;
-  // 429 + 5xx + network errors are worth another attempt.
+  // 429 + 5xx + network errors are worth another identical attempt.
   return err.status === 429 || err.status >= 500 || err.status === 0;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function attachJobContext(

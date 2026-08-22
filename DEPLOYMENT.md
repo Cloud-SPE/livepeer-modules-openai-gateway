@@ -120,7 +120,7 @@ LOC_API_KEY=…                           # required; sent as X-API-Key
 LOC_TIMEOUT_MS=30000
 LOC_SETTLE_INTERVAL_MS=15000            # background settler cadence
 LOC_SETTLE_ALERT_ATTEMPTS=20            # alert threshold; retries do not abandon
-LOC_OPEN_MAX_ATTEMPTS=3                 # identical idempotent open attempts
+LOC_OPEN_MAX_ATTEMPTS=3                 # identical idempotent, backoff-spaced attempts
 ```
 
 ### Funding

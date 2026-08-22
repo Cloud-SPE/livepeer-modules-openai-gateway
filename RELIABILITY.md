@@ -33,7 +33,8 @@ Reliability properties this gateway is expected to uphold.
 - **The LOC owns route selection and failover.** The LOC returns a
   single route per job; per-candidate health cooldowns and multi-route
   failover do not live in the gateway. Retryable LOC-open failures repeat the
-  identical request, bounded by `LOC_OPEN_MAX_ATTEMPTS`. See
+  identical request with bounded exponential backoff, including the typed
+  `IDEMPOTENCY_IN_PROGRESS` state, bounded by `LOC_OPEN_MAX_ATTEMPTS`. See
   [`docs/design-docs/route-selector.md`](./docs/design-docs/route-selector.md).
 - **Settlement is signed, durable, and async.** A lookup worker stores the
   complete broker-signed claim before a background settler submits it to LOC.
