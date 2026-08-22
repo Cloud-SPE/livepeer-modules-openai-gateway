@@ -379,17 +379,23 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
         items: [{
           name: 'openai:audio-transcriptions',
           work_unit: 'seconds',
+          work_unit_estimator: {
+            id: 'multipart-audio-duration/v1',
+            rounding: 'ceil-to-whole-seconds',
+            exactness: 'exact-or-reject',
+            package: null,
+            fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
+          },
           offerings: [{
             id: 'default',
             price_per_work_unit_wei: '100',
-            work_unit: {
-              name: 'seconds',
-              estimator: {
-                id: 'multipart-audio-duration/v1',
-                rounding: 'ceil-to-whole-seconds',
-                exactness: 'exact-or-reject',
-                fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
-              },
+            work_unit: 'seconds',
+            work_unit_estimator: {
+              id: 'multipart-audio-duration/v1',
+              rounding: 'ceil-to-whole-seconds',
+              exactness: 'exact-or-reject',
+              package: null,
+              fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
             },
             protocol: 'paid-job/v1',
             job: { transports: ['multipart'] },
@@ -399,7 +405,8 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
     }),
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
-      const offering = (await client.listCapabilities())[0]!.offerings[0]!;
+      const capability = (await client.listCapabilities())[0]!;
+      const offering = capability.offerings[0]!;
       assert.equal(offering.workUnit, 'seconds');
       assert.deepEqual(offering.estimator, {
         id: 'multipart-audio-duration/v1',
@@ -407,6 +414,7 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
         exactness: 'exact-or-reject',
         fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
       });
+      assert.deepEqual(capability.estimator, offering.estimator);
     },
   );
 });

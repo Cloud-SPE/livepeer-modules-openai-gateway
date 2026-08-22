@@ -27,6 +27,8 @@ against them; we do not vendor those implementations. The gateway locally owns
 the small media-container parser needed to implement the advertised
 `multipart-audio-duration/v1` funding contract. It matches the protocol by
 estimator id, rounding, and exactness—not by a Modules package identity.
+LOC exposes this metadata in `work_unit_estimator` alongside `work_unit` at
+both capability and offering levels; route funding binds to the offering.
 
 ## Binding decisions
 

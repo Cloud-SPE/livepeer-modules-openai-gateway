@@ -115,6 +115,7 @@ export interface LocWorkUnitEstimator {
 export interface LocCapability {
   name: string;
   workUnit: string | null;
+  estimator?: LocWorkUnitEstimator;
   offerings: LocOffering[];
 }
 
@@ -283,18 +284,20 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
       return items.map((item) => {
         const cap = asRecord(item);
         const offerings = Array.isArray(cap['offerings']) ? cap['offerings'] : [];
+        const capabilityEstimator = parseWorkUnitEstimator(cap['work_unit_estimator']);
         return {
           name: str(cap['name']),
-          workUnit: parseWorkUnit(cap['work_unit']).name,
+          workUnit: strOrNull(cap['work_unit']),
+          ...(capabilityEstimator ? { estimator: capabilityEstimator } : {}),
           offerings: offerings.map((o) => {
             const off = asRecord(o);
             const job = asRecord(off['job']);
-            const workUnit = parseWorkUnit(off['work_unit']);
+            const estimator = parseWorkUnitEstimator(off['work_unit_estimator']);
             return {
               id: str(off['id']),
               pricePerWorkUnitWei: strOrNull(off['price_per_work_unit_wei']),
-              workUnit: workUnit.name,
-              ...(workUnit.estimator ? { estimator: workUnit.estimator } : {}),
+              workUnit: strOrNull(off['work_unit']),
+              ...(estimator ? { estimator } : {}),
               protocol: str(off['protocol']),
               transports: parseJobTransports(job['transports']),
               extra: asRecord(off['extra']),
@@ -338,28 +341,14 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
   };
 }
 
-function parseWorkUnit(value: unknown): {
-  name: string | null;
-  estimator: LocWorkUnitEstimator | null;
-} {
-  if (typeof value === 'string') return { name: value || null, estimator: null };
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { name: null, estimator: null };
-  }
-  const workUnit = asRecord(value);
-  const estimatorRaw = workUnit['estimator'];
-  if (estimatorRaw === undefined || estimatorRaw === null) {
-    return { name: strOrNull(workUnit['name']), estimator: null };
-  }
-  const estimator = asRecord(estimatorRaw);
+function parseWorkUnitEstimator(value: unknown): LocWorkUnitEstimator | null {
+  if (value === undefined || value === null) return null;
+  const estimator = asRecord(value);
   return {
-    name: strOrNull(workUnit['name']),
-    estimator: {
-      id: requireText(estimator['id'], 'work_unit.estimator.id'),
-      rounding: requireText(estimator['rounding'], 'work_unit.estimator.rounding'),
-      exactness: requireText(estimator['exactness'], 'work_unit.estimator.exactness'),
-      fixtures: strOrNull(estimator['fixtures']),
-    },
+    id: requireText(estimator['id'], 'work_unit_estimator.id'),
+    rounding: requireText(estimator['rounding'], 'work_unit_estimator.rounding'),
+    exactness: requireText(estimator['exactness'], 'work_unit_estimator.exactness'),
+    fixtures: strOrNull(estimator['fixtures']),
   };
 }
 
