@@ -91,7 +91,7 @@ for the unresolved financial terminal states.
 - [ ] Build v2 mock contract regressions (`lmoa-3bv.17`).
 - [ ] Run signed registry → broker → gateway → LOC conformance
   (`lmoa-3bv.18`).
-- [ ] Delete v0 modes and workarounds (`lmoa-3bv.19`).
+- [x] Delete v0 modes and workarounds (`lmoa-3bv.19`).
 - [ ] Update final architecture and operator documentation
   (`lmoa-3bv.20`).
 - [ ] Execute the breaking cutover (`lmoa-3bv.21`).
