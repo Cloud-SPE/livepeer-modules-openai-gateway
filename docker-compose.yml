@@ -70,7 +70,7 @@ services:
 
       # ── email (optional) ──
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_BASE_URL: ${RESEND_BASE_URL:-https://api.resend.com/emails}
+      RESEND_BASE_URL: ${RESEND_BASE_URL:-https://api.resend.com}
       FROM_EMAIL: ${FROM_EMAIL:-OpenAI Service <noreply@example.com>}
 
       # ── LOC clearinghouse ──

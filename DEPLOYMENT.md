@@ -82,7 +82,7 @@ non-negotiable secrets in production:
 | `IP_HASH_PEPPER` | Same, for IPs / verification / session tokens. | `openssl rand -hex 32` |
 | `METRICS_TOKEN` | Bearer token to fetch `/metrics`. Optional; deployer's choice between this and front-edge basic auth. | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Email delivery. Optional but strongly recommended. | from your Resend dashboard |
-| `RESEND_BASE_URL` | Override the Resend email API endpoint. Optional. | `https://api.resend.com/emails` |
+| `RESEND_BASE_URL` | Resend-compatible API origin; the SDK appends `/emails`. | `https://api.resend.com` |
 | `LOC_API_KEY` | Auth for the LOC clearinghouse (sent as `X-API-Key`). Required for `/v1/*`. | from the LOC portal |
 
 **Pepper rotation**: changing `API_KEY_HASH_PEPPER` invalidates every
