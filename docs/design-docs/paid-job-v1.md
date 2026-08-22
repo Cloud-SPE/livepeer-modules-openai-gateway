@@ -23,10 +23,10 @@ The gateway depends on two external HTTP contracts:
 
 Capability runners, broker middleware, settlement verification code, and LOC
 accounting remain external. We pin release-ready revisions and run conformance
-against them; we do not vendor those implementations. The one intentional
-code dependency is Modules' public `@livepeer-network/audio-duration` client
-estimator, because a transcription buyer must reproduce the advertised exact
-funding ceiling before opening a job.
+against them; we do not vendor those implementations. The gateway locally owns
+the small media-container parser needed to implement the advertised
+`multipart-audio-duration/v1` funding contract. It matches the protocol by
+estimator id, rounding, and exactness—not by a Modules package identity.
 
 ## Binding decisions
 
@@ -239,9 +239,8 @@ These block release, but not the independent catalog/client/schema retrofit:
    minutes. Coordination: `lmoa-3bv.22`.
 
 The release gate pins immutable upstream revisions only after these contracts
-land. Those pins gate joint behavior; they do not import broker, daemon, or LOC
-implementation code into this gateway. The audio estimator is the explicit,
-narrow exception described above.
+land. Those pins gate joint behavior; they do not import broker, daemon, LOC,
+or Modules package implementation code into this gateway.
 
 ## Resolved upstream contracts
 

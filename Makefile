@@ -107,7 +107,6 @@ clean:
 
 docker-build:
 	docker build \
-		--build-context audio_duration=../livepeer-network-modules/packages/audio-duration \
 		-t $(IMAGE):$(TAG) -f gateway/Dockerfile .
 	@echo "built $(IMAGE):$(TAG)"
 
@@ -122,7 +121,6 @@ docker-publish:
 		docker buildx create --name multiarch --driver docker-container --bootstrap
 	docker buildx build --builder multiarch \
 		--platform linux/amd64,linux/arm64 \
-		--build-context audio_duration=../livepeer-network-modules/packages/audio-duration \
 		--push \
 		-t $(IMAGE):$(TAG) \
 		-t $(IMAGE):latest \

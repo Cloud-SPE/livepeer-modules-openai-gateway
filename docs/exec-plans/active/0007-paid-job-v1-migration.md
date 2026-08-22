@@ -133,9 +133,9 @@ for the unresolved financial terminal states.
   ambiguous-open and usage workarounds the new contract removes.
 - **2026-08-21 — external implementations remain behind HTTP.** Upstream
   revisions are conformance release gates, not imported broker/daemon/LOC
-  implementations. The reproducible transcription ceiling is different: the
-  gateway intentionally consumes Modules' public
-  `@livepeer-network/audio-duration` client package.
+  implementations. The reproducible transcription ceiling is implemented by
+  the gateway-owned `multipart-audio-duration/v1` parser, with no sibling
+  repository or package dependency.
 - **2026-08-21 — accounting-only replay.** Finish accounting for the original
   job and return `upstream_response_lost`; never auto-resubmit paid work.
 - **2026-08-21 — settlement query on all transports.** Signed lookup is the

@@ -13,7 +13,11 @@
 import type { RegistryCatalog, RouteCandidate } from '../registry/catalog.js';
 import { inferModel } from '../registry/catalog.js';
 import type { JobTransport } from './client.js';
-import type { LocWorkUnitEstimator } from './client.js';
+
+export type RequiredEstimatorContract = Pick<
+  import('./client.js').LocWorkUnitEstimator,
+  'id' | 'rounding' | 'exactness'
+>;
 
 export interface ResolvedRoute {
   /** Offering id to open the LOC job with. */
@@ -30,7 +34,7 @@ export interface ResolveInput {
   requestedModel: string;
   transport: JobTransport;
   expectedWorkUnit?: string;
-  expectedEstimator?: LocWorkUnitEstimator;
+  expectedEstimator?: RequiredEstimatorContract;
 }
 
 export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> {
@@ -65,8 +69,7 @@ export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> 
       !actual ||
       actual.id !== expected.id ||
       actual.rounding !== expected.rounding ||
-      actual.exactness !== expected.exactness ||
-      actual.package !== expected.package
+      actual.exactness !== expected.exactness
     ) {
       throw new Error(
         `offering ${pick.offering} does not advertise the required ${expected.id} estimator contract`,

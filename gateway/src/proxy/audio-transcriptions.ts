@@ -6,7 +6,7 @@
 import {
   ESTIMATOR,
   estimateCeilingSecondsFromMultipart,
-} from '@livepeer-network/audio-duration';
+} from './service/audioDuration/index.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -33,8 +33,6 @@ const REQUIRED_ESTIMATOR = {
   id: ESTIMATOR,
   rounding: 'ceil-to-whole-seconds',
   exactness: 'exact-or-reject',
-  package: '@livepeer-network/audio-duration',
-  fixtures: null,
 } as const;
 
 export async function registerAudioTranscriptionsRoute(

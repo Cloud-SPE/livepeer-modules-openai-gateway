@@ -157,6 +157,34 @@ test('transcription funding requires the exact advertised estimator contract', a
   assert.equal(resolved.offering, 'default');
 });
 
+test('estimator package metadata does not create an implementation dependency', async () => {
+  const audio = candidate({
+    capability: 'openai:audio-transcriptions',
+    offering: 'default',
+    transports: ['multipart'],
+    workUnit: 'seconds',
+    estimator: {
+      ...AUDIO_ESTIMATOR,
+      package: 'broker-informational-package-name',
+      fixtures: 'broker-informational-fixture-location',
+    },
+  });
+  const resolved = await resolveRoute({
+    catalog: catalogOf([audio]),
+    modelMap: {},
+    capability: 'openai:audio-transcriptions',
+    requestedModel: 'default',
+    transport: 'multipart',
+    expectedWorkUnit: 'seconds',
+    expectedEstimator: {
+      id: AUDIO_ESTIMATOR.id,
+      rounding: AUDIO_ESTIMATOR.rounding,
+      exactness: AUDIO_ESTIMATOR.exactness,
+    },
+  });
+  assert.equal(resolved.offering, 'default');
+});
+
 test('transcription funding fails closed when LOC drops or changes the estimator', async () => {
   for (const estimator of [undefined, { ...AUDIO_ESTIMATOR, id: 'unknown/v2' }]) {
     await assert.rejects(

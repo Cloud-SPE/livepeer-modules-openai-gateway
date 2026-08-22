@@ -346,7 +346,7 @@ sequenceDiagram
 | Portal / admin / site users | HTTPS → static SPAs + JSON APIs |
 | LOC clearinghouse | HTTP(S) + `X-API-Key` (`LOC_BASE_URL`); jobs + settle + capabilities |
 | `capability-broker` | HTTP(S), always using the URL returned by the LOC job; localhost pilot returns `127.0.0.1:8411` |
-| `@livepeer-network/audio-duration` | Client package that reproduces an offering's exact transcription funding ceiling; locally linked from the sibling Modules checkout |
+| Local audio-duration estimator | Gateway-owned implementation of the advertised `multipart-audio-duration/v1` funding contract; no Modules source or package dependency |
 | Postgres | TCP, single DB for all SaaS data |
 | Resend | HTTPS, email delivery (optional in dev) |
 | EVM chain (Arbitrum One by default) | Indirectly — only via the LOC, which owns chain access and the PM-ticket wallet |
