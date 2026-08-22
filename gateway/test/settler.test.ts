@@ -131,6 +131,22 @@ test('404 job_not_found is a permanent reconciliation failure', async () => {
   assert.equal(log.failures[0]!.permanent, true);
 });
 
+test('LOC signature rejection is permanent and retains the original claim for review', async () => {
+  const original = row();
+  const { store, log } = fakeStore([original]);
+  const { loc, settles } = fakeLoc(() => {
+    throw new LocApiError({
+      status: 400,
+      code: 'settlement_signature_invalid',
+      message: 'signature verification failed',
+    });
+  });
+  const stats = await runSettleOnce(store, loc, 20, 50);
+  assert.deepEqual(stats, { settled: 0, failed: 1, retried: 0 });
+  assert.equal(log.failures[0]!.permanent, true);
+  assert.deepEqual(settles[0]!.req.settlement, original.settlement);
+});
+
 test('transient failure records a retry', async () => {
   const { store, log } = fakeStore([row()]);
   const { loc } = fakeLoc(() => {

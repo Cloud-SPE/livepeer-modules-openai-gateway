@@ -147,11 +147,11 @@ export const usageReservations = pgTable(
     ),
     lookupStateCheck: check(
       'usage_reservations_settlement_lookup_state_check',
-      sql`${t.settlementLookupState} IS NULL OR ${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight', 'ready', 'not_admitted', 'no_record', 'evidence_expired', 'failed')`,
+      sql`${t.settlementLookupState} IS NULL OR ${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight', 'ready', 'not_admitted', 'no_record', 'outcome_unknown', 'evidence_expired', 'failed')`,
     ),
     terminalEvidenceTypeCheck: check(
       'usage_reservations_terminal_evidence_type_check',
-      sql`${t.terminalEvidenceType} IS NULL OR ${t.terminalEvidenceType} IN ('not_admitted', 'evidence_expired', 'debit_failed')`,
+      sql`${t.terminalEvidenceType} IS NULL OR ${t.terminalEvidenceType} IN ('not_admitted', 'outcome_unknown', 'evidence_expired', 'debit_failed')`,
     ),
   }),
 );

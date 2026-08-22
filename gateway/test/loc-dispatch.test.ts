@@ -372,6 +372,48 @@ test('broker idempotency refusal is exposed as a typed outcome', async () => {
   });
 });
 
+test('unsupported transport refusal remains pre-admission and never creates accounting evidence', async () => {
+  const server: Server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(400, {
+        'Content-Type': 'application/json',
+        'Livepeer-Error': 'protocol_transport_unsupported',
+        'Livepeer-Request-Id': 'broker-request-1',
+        'Livepeer-Work-Unit': 'tokens',
+        'Livepeer-Work-Units': '0',
+      });
+      res.end('{"message":"stream is not declared"}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const brokerUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const { loc, calls } = fakeLoc(() => job(brokerUrl, 1));
+    await assert.rejects(
+      dispatchReqresp({
+        loc,
+        capability: 'c',
+        offering: 'o',
+        estimatedUnits: 1,
+        idempotencyKey: 'r',
+        body: null,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof LivepeerBrokerError);
+        assert.equal(err.code, 'protocol_transport_unsupported');
+        assert.equal(err.jobId, undefined);
+        assert.equal(jobRefFromError(err)?.brokerJobId, '');
+        return true;
+      },
+    );
+    assert.equal(calls.opens, 1);
+    assert.deepEqual(calls.settles, []);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('LOC 402 insufficient_credit: throws immediately, no retry', async () => {
   const { loc, calls } = fakeLoc(
     () => new LocApiError({ status: 402, code: 'insufficient_credit', message: 'broke' }),

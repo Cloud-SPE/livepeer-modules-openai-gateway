@@ -107,6 +107,7 @@ export async function registerUsageRoutes(
             | 'ready'
             | 'not_admitted'
             | 'no_record'
+            | 'outcome_unknown'
             | 'evidence_expired'
             | 'failed'
             | null,
@@ -125,6 +126,7 @@ export async function registerUsageRoutes(
           settleAttempts: r.settleAttempts,
           terminalEvidenceType: r.terminalEvidenceType as
             | 'not_admitted'
+            | 'outcome_unknown'
             | 'evidence_expired'
             | 'debit_failed'
             | null,

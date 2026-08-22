@@ -60,3 +60,16 @@ test('paid-job evidence migration is forward-only for historical rows', async ()
   assert.match(migration, /settlement_lookup_attempts\s+INTEGER NOT NULL DEFAULT 0/);
   assert.doesNotMatch(migration, /24\s*hour/i);
 });
+
+test('admission terminal migration preserves distinct unknown and expired outcomes', async () => {
+  const migrationUrl = new URL(
+    '../../migrations/0007_paid_job_admission_terminal.sql',
+    import.meta.url,
+  );
+  const migration = await readFile(migrationUrl, 'utf8');
+  assert.doesNotMatch(migration, /\b(?:DELETE|TRUNCATE)\b/i);
+  assert.match(migration, /'outcome_unknown'/);
+  assert.match(migration, /'evidence_expired'/);
+  assert.match(migration, /DROP CONSTRAINT usage_reservations_settlement_lookup_state_check/);
+  assert.match(migration, /ADD CONSTRAINT usage_reservations_settlement_lookup_state_check/);
+});

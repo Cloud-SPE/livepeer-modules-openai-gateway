@@ -136,6 +136,7 @@ export type SettlementLookupState =
   | 'ready'
   | 'not_admitted'
   | 'no_record'
+  | 'outcome_unknown'
   | 'evidence_expired'
   | 'failed';
 
@@ -318,7 +319,7 @@ export async function recordSettlementEvidence(
 export async function recordSettlementLookupTerminal(
   db: Db,
   id: string,
-  state: 'not_admitted' | 'evidence_expired' | 'failed',
+  state: 'not_admitted' | 'outcome_unknown' | 'evidence_expired' | 'failed',
   detail: string,
   encodedEvidence: string | null = null,
 ): Promise<void> {
@@ -331,7 +332,13 @@ export async function recordSettlementLookupTerminal(
       settlementLookupUpdatedAt: new Date(),
       settlementLookupLastError: detail.slice(0, 500),
       terminalEvidenceType:
-        state === 'not_admitted' ? 'not_admitted' : state === 'evidence_expired' ? 'evidence_expired' : null,
+        state === 'not_admitted'
+          ? 'not_admitted'
+          : state === 'outcome_unknown'
+            ? 'outcome_unknown'
+            : state === 'evidence_expired'
+              ? 'evidence_expired'
+              : null,
       terminalEvidenceEncoded: encodedEvidence,
     })
     .where(eq(usageReservations.id, id));

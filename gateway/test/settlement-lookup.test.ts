@@ -95,6 +95,19 @@ test('NOT_ADMITTED is audit evidence, not a zero-unit settlement', async () => {
   assert.equal(log.records.length, 0);
 });
 
+test('ADMITTED_OUTCOME_UNKNOWN is terminal audit state, not a settlement', async () => {
+  const log = storeLog();
+  const stats = await runSettlementLookupOnce(log.store, 1000, 1000, 10, async () => ({
+    kind: 'terminal_evidence',
+    state: 'outcome_unknown',
+    detail: 'admitted but outcome unavailable',
+    encoded: null,
+  }));
+  assert.deepEqual(stats, { captured: 0, deferred: 0, failed: 1 });
+  assert.deepEqual(log.terminals, ['outcome_unknown']);
+  assert.equal(log.records.length, 0);
+});
+
 test('signed DEBIT_FAILED is retained as an explicit non-success', async () => {
   const log = storeLog();
   const stats = await runSettlementLookupOnce(log.store, 1000, 1000, 10, async () => ({
@@ -112,4 +125,33 @@ test('network failure remains durably retryable', async () => {
   });
   assert.deepEqual(stats, { captured: 0, deferred: 1, failed: 0 });
   assert.deepEqual(log.deferrals, ['pending']);
+});
+
+test('a fresh lookup worker resumes the persisted request identity after restart', async () => {
+  let pending = row();
+  const captured: SettlementEvidence[] = [];
+  const store: SettlementLookupStore = {
+    async claim() { return captured.length > 0 ? [] : [pending]; },
+    async defer(_id, state) { pending = { ...pending, attempts: pending.attempts + 1 }; assert.equal(state, 'accounting_pending'); },
+    async record(_id, value) { captured.push(value); },
+    async terminal() { throw new Error('unexpected terminal state'); },
+  };
+
+  const firstProcess = await runSettlementLookupOnce(store, 1000, 1000, 10, async () => ({
+    kind: 'deferred',
+    state: 'accounting_pending',
+    detail: 'payee unavailable',
+  }));
+  assert.deepEqual(firstProcess, { captured: 0, deferred: 1, failed: 0 });
+  assert.equal(pending.attempts, 1);
+
+  // A new worker instance has no process memory from the first pass. It uses
+  // only the durable row identity and captures the eventual signed claim.
+  const restartedProcess = await runSettlementLookupOnce(store, 1000, 1000, 10, async (claimed) => {
+    assert.equal(claimed.locRequestId, 'request-1');
+    assert.equal(claimed.brokerJobId, 'broker-job-1');
+    return { kind: 'evidence', evidence: evidence() };
+  });
+  assert.deepEqual(restartedProcess, { captured: 1, deferred: 0, failed: 0 });
+  assert.equal(captured[0]!.requestId, 'request-1');
 });

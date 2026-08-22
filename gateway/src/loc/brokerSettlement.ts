@@ -12,7 +12,7 @@ export type BrokerSettlementLookup =
   | { kind: 'deferred'; state: 'accounting_pending' | 'in_flight' | 'no_record'; detail: string }
   | {
       kind: 'terminal_evidence';
-      state: 'not_admitted' | 'evidence_expired';
+      state: 'not_admitted' | 'outcome_unknown' | 'evidence_expired';
       detail: string;
       encoded: string | null;
     };
@@ -79,6 +79,14 @@ export async function lookupBrokerSettlement(
       kind: 'terminal_evidence',
       state: 'evidence_expired',
       detail: optionalText(body['detail']) ?? 'broker admitted the exchange but detailed evidence expired',
+      encoded: null,
+    };
+  }
+  if (outcome === 'ADMITTED_OUTCOME_UNKNOWN') {
+    return {
+      kind: 'terminal_evidence',
+      state: 'outcome_unknown',
+      detail: optionalText(body['detail']) ?? 'broker admitted the exchange but cannot recover its terminal outcome',
       encoded: null,
     };
   }

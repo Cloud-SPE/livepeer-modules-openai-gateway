@@ -84,7 +84,7 @@ export async function registerAdminUsageRoutes(
           jobTransport: r.jobTransport as 'unary' | 'stream' | 'multipart' | null,
           settlementLookupState: r.settlementLookupState as
             | 'pending' | 'accounting_pending' | 'in_flight' | 'ready'
-            | 'not_admitted' | 'no_record' | 'evidence_expired' | 'failed' | null,
+            | 'not_admitted' | 'no_record' | 'outcome_unknown' | 'evidence_expired' | 'failed' | null,
           settlementLookupAttempts: r.settlementLookupAttempts,
           settlementLookupLastError: r.settlementLookupLastError,
           brokerActualUnits: r.brokerActualUnits,
@@ -99,7 +99,7 @@ export async function registerAdminUsageRoutes(
           settleState: r.settleState as 'pending' | 'settled' | 'failed' | null,
           settleAttempts: r.settleAttempts,
           terminalEvidenceType: r.terminalEvidenceType as
-            | 'not_admitted' | 'evidence_expired' | 'debit_failed' | null,
+            | 'not_admitted' | 'outcome_unknown' | 'evidence_expired' | 'debit_failed' | null,
           state: r.state as 'open' | 'committed' | 'refunded',
           committedWorkUnits: r.committedWorkUnits,
           latencyMs: r.latencyMs,

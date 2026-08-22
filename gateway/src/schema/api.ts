@@ -114,6 +114,7 @@ export const UsageReservationRow = z
         'ready',
         'not_admitted',
         'no_record',
+        'outcome_unknown',
         'evidence_expired',
         'failed',
       ])
@@ -132,7 +133,7 @@ export const UsageReservationRow = z
     settleState: z.enum(['pending', 'settled', 'failed']).nullable(),
     settleAttempts: z.number().int().nonnegative(),
     terminalEvidenceType: z
-      .enum(['not_admitted', 'evidence_expired', 'debit_failed'])
+      .enum(['not_admitted', 'outcome_unknown', 'evidence_expired', 'debit_failed'])
       .nullable(),
     state: z.enum(['open', 'committed', 'refunded']),
     committedWorkUnits: z.number().nullable(),

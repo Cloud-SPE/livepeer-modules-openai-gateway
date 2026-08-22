@@ -134,6 +134,30 @@ test('accounting_pending remains a deferred lookup state', async () => {
   );
 });
 
+test('request-id recovery preserves every non-settlement outcome distinctly', async () => {
+  const cases = [
+    { status: 202, body: { request_id: 'request-1', outcome: 'IN_FLIGHT' }, state: 'in_flight' },
+    { status: 404, body: { request_id: 'request-1', outcome: 'NO_RECORD' }, state: 'no_record' },
+    { status: 200, body: { request_id: 'request-1', outcome: 'NOT_ADMITTED', non_admission: 'signed-audit' }, state: 'not_admitted' },
+    { status: 200, body: { request_id: 'request-1', outcome: 'ADMITTED_OUTCOME_UNKNOWN' }, state: 'outcome_unknown' },
+    { status: 200, body: { request_id: 'request-1', outcome: 'ADMITTED_EVIDENCE_EXPIRED', job_id: 'broker-job-1' }, state: 'evidence_expired' },
+  ] as const;
+  for (const item of cases) {
+    await withBroker(
+      () => ({ status: item.status, body: item.body }),
+      async (brokerUrl) => {
+        const result = await lookupBrokerSettlement(
+          row({ brokerUrl, brokerJobId: null }),
+          5000,
+        );
+        assert.equal(result.kind === 'deferred' || result.kind === 'terminal_evidence'
+          ? result.state
+          : 'evidence', item.state);
+      },
+    );
+  }
+});
+
 test('response metadata cannot disagree with signed evidence', async () => {
   await withBroker(
     () => ({

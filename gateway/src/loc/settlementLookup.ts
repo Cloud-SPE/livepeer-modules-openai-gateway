@@ -19,7 +19,7 @@ export interface SettlementLookupStore {
   record(id: string, evidence: usageRepo.SettlementEvidence): Promise<void>;
   terminal(
     id: string,
-    state: 'not_admitted' | 'evidence_expired' | 'failed',
+    state: 'not_admitted' | 'outcome_unknown' | 'evidence_expired' | 'failed',
     detail: string,
     encoded?: string | null,
   ): Promise<void>;
