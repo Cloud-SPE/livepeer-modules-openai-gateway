@@ -1,7 +1,8 @@
 // POST /v1/audio/transcriptions — multipart/form-data input, Whisper STT.
-// Work unit: whole seconds of uploaded audio. The canonical Modules
-// estimator sizes the LOC funding ceiling before dispatch; it is never
-// settlement evidence. The broker's signed terminal claim remains authoritative.
+// Work unit: whole seconds of uploaded audio. The gateway-owned implementation
+// of the advertised estimator sizes the LOC funding ceiling before dispatch;
+// it is never settlement evidence. The broker's signed terminal claim remains
+// authoritative.
 
 import {
   ESTIMATOR,
