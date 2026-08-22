@@ -388,8 +388,7 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
                 id: 'multipart-audio-duration/v1',
                 rounding: 'ceil-to-whole-seconds',
                 exactness: 'exact-or-reject',
-                package: '@livepeer-network/audio-duration',
-                fixtures: 'fixtures/multipart-audio-duration-v1',
+                fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
               },
             },
             protocol: 'paid-job/v1',
@@ -406,8 +405,7 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
         id: 'multipart-audio-duration/v1',
         rounding: 'ceil-to-whole-seconds',
         exactness: 'exact-or-reject',
-        package: '@livepeer-network/audio-duration',
-        fixtures: 'fixtures/multipart-audio-duration-v1',
+        fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
       });
     },
   );

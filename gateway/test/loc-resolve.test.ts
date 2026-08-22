@@ -133,8 +133,7 @@ const AUDIO_ESTIMATOR = {
   id: 'multipart-audio-duration/v1',
   rounding: 'ceil-to-whole-seconds',
   exactness: 'exact-or-reject',
-  package: '@livepeer-network/audio-duration',
-  fixtures: null,
+  fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
 };
 
 test('transcription funding requires the exact advertised estimator contract', async () => {
@@ -157,7 +156,7 @@ test('transcription funding requires the exact advertised estimator contract', a
   assert.equal(resolved.offering, 'default');
 });
 
-test('estimator package metadata does not create an implementation dependency', async () => {
+test('estimator fixture location is informational rather than an implementation dependency', async () => {
   const audio = candidate({
     capability: 'openai:audio-transcriptions',
     offering: 'default',
@@ -165,7 +164,6 @@ test('estimator package metadata does not create an implementation dependency', 
     workUnit: 'seconds',
     estimator: {
       ...AUDIO_ESTIMATOR,
-      package: 'broker-informational-package-name',
       fixtures: 'broker-informational-fixture-location',
     },
   });

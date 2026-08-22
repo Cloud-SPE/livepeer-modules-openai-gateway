@@ -367,8 +367,9 @@ sequenceDiagram
   admin could be reused for a different inference surface. OpenAI
   specifics live entirely in `proxy/`.
 - **Runner implementations do not cross the boundary.** Workload execution is
-  mediated by broker HTTP. The audio-duration package is a client estimator,
-  not runner or broker implementation code.
+  mediated by broker HTTP. The gateway-owned audio-duration estimator
+  implements a published funding contract; it does not import runner, broker,
+  or Modules implementation code.
 
 ---
 

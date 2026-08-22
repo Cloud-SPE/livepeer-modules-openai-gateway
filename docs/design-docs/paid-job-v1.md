@@ -257,11 +257,16 @@ or Modules package implementation code into this gateway.
   offering explicitly enables `allow_inexact`. Coordination bead
   `lmoa-3bv.4` is closed.
 
+- **Estimator ownership.** The gateway owns its client implementation. Modules
+  retains the broker extractor, estimator id, rounding/exactness rules, and
+  shared fixture location/vectors. LOC passes those contract fields through
+  unchanged; no package name is advertised or consumed.
+
 ## Reviewed upstream baseline
 
 - Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `cedef80`.
   It includes request-id exchange recovery, corrected operational retention
-  and admission tombstones, the canonical client estimator and registry
+  and admission tombstones, the canonical estimator contract and registry
   propagation, and a restartable localhost integration stack.
 - LOC branch `tasks/lpm-v2`: reviewed committed head `a9a556c`. It includes
   request-id recovery, conservative unresolved-job finalization, payer validity

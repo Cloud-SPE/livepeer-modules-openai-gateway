@@ -34,8 +34,8 @@ Out of scope:
 
 - backward compatibility, dual-stack flags, or fallback to v0;
 - capability runner implementations;
-- importing or vendoring broker, daemon, worker, or LOC implementations (the
-  public client-side audio estimator package is the narrow exception);
+- importing or vendoring broker, daemon, worker, LOC, or Modules package
+  implementations;
 - customer billing or price/rate-card behavior;
 - paid-session live-media work;
 - fixing payer-side `INVALID_RECIPIENT_RAND` rotation.

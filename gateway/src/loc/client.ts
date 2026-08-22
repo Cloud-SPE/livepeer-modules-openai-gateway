@@ -109,7 +109,6 @@ export interface LocWorkUnitEstimator {
   id: string;
   rounding: string;
   exactness: string;
-  package: string | null;
   fixtures: string | null;
 }
 
@@ -359,7 +358,6 @@ function parseWorkUnit(value: unknown): {
       id: requireText(estimator['id'], 'work_unit.estimator.id'),
       rounding: requireText(estimator['rounding'], 'work_unit.estimator.rounding'),
       exactness: requireText(estimator['exactness'], 'work_unit.estimator.exactness'),
-      package: strOrNull(estimator['package']),
       fixtures: strOrNull(estimator['fixtures']),
     },
   };
