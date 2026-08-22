@@ -76,9 +76,11 @@ export function flattenCapabilities(capabilities: LocCapability[]): RouteCandida
     for (const offering of capability.offerings) {
       if (!offering.id) continue;
       if (offering.protocol !== PAID_JOB_PROTOCOL) {
-        throw new Error(
-          `unsupported protocol ${offering.protocol || '<missing>'} for ${capability.name}/${offering.id}`,
-        );
+        // LOC serves a shared catalog. Session capabilities (for example the
+        // Meetings pilot) are valid LOC entries but are outside this
+        // paid-job-only gateway's product surface.
+        if (offering.protocol) continue;
+        throw new Error(`missing protocol for ${capability.name}/${offering.id}`);
       }
       if (offering.transports.length === 0) {
         throw new Error(`missing job transports for ${capability.name}/${offering.id}`);

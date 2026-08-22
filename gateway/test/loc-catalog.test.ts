@@ -79,10 +79,13 @@ test('flattenCapabilities drops empty names and offering ids', () => {
   assert.equal(candidates.length, 0);
 });
 
-test('flattenCapabilities rejects unknown protocol and missing transports', () => {
+test('flattenCapabilities ignores other protocols and rejects malformed paid-job offerings', () => {
+  assert.deepEqual(flattenCapabilities([{ name: 'meetings', workUnit: 'seconds', offerings: [
+    { id: 'default', pricePerWorkUnitWei: '1', workUnit: 'seconds', protocol: 'paid-session/v1', transports: [], extra: {} },
+  ] }]), []);
   assert.throws(() => flattenCapabilities([{ name: 'chat', workUnit: 'tokens', offerings: [
-    { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-session/v1', transports: [], extra: {} },
-  ] }]), /unsupported protocol/);
+    { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: '', transports: ['unary'], extra: {} },
+  ] }]), /missing protocol/);
   assert.throws(() => flattenCapabilities([{ name: 'chat', workUnit: 'tokens', offerings: [
     { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-job\/v1', transports: [], extra: {} },
   ] }]), /missing job transports/);
