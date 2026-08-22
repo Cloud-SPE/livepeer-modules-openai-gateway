@@ -73,7 +73,7 @@ require_status 200 "$status" "POST /admin/waitlist/:id/approve"
 
 # Pull the plaintext key out of the gateway logs (email is disabled in
 # default compose; the key was logged with "would have sent").
-key=$(docker compose logs --tail=100 gateway 2>/dev/null | grep -oE 'sk-[A-Za-z0-9_-]{40,}' | head -1 || true)
+key=$(docker compose logs --tail=100 gateway 2>/dev/null | grep -oE 'sk-[A-Za-z0-9_-]{40,}' | tail -1 || true)
 [[ -n "$key" ]] || fail "no plaintext API key found in gateway logs"
 pass "extracted plaintext key (${key:0:11}…)"
 
