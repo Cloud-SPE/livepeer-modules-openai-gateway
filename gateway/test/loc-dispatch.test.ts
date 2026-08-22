@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { dispatchReqresp, isAccountingReplay, jobRefFromError } from '../src/loc/dispatch.js';
+import {
+  dispatchMultipart,
+  dispatchReqresp,
+  isAccountingReplay,
+  jobRefFromError,
+} from '../src/loc/dispatch.js';
 import { LocApiError, type LocClient, type OpenJobRequest, type OpenJobResponse, type SettleJobRequest } from '../src/loc/client.js';
 import { LivepeerBrokerError } from '../src/proxy/livepeer/errors.js';
 
@@ -96,14 +101,18 @@ function fakeLoc(
   return { loc, calls };
 }
 
-function job(brokerUrl: string, n: number): OpenJobResponse {
+function job(
+  brokerUrl: string,
+  n: number,
+  transport: OpenJobResponse['transport'] = 'unary',
+): OpenJobResponse {
   return {
     jobId: `job-${n}`,
     requestId: `broker-request-${n}`,
     workId: `work-${n}`,
     brokerUrl,
     protocol: 'paid-job/v1',
-    transport: 'unary',
+    transport,
     workUnit: 'tokens',
     paymentEnvelope: `envelope-${n}`,
     expectedValueWei: '100',
@@ -112,6 +121,38 @@ function job(brokerUrl: string, n: number): OpenJobResponse {
     openedAt: '',
   };
 }
+
+test('multipart uses the same paid-job endpoint and preserves the upload content type', async () => {
+  await withMockBroker(200, async (brokerUrl, brokerRequests) => {
+    const { loc, calls } = fakeLoc(() => job(brokerUrl, 1, 'multipart'));
+    const out = await dispatchMultipart({
+      loc,
+      capability: 'openai:audio-transcriptions',
+      offering: 'whisper',
+      estimatedUnits: 3,
+      maxTotalUnits: 4,
+      idempotencyKey: 'multipart-operation',
+      body: Buffer.from('--boundary--\r\n'),
+      contentType: 'multipart/form-data; boundary=boundary',
+    });
+    assert.deepEqual(calls.openRequests, [{
+      idempotencyKey: 'multipart-operation',
+      capability: 'openai:audio-transcriptions',
+      offering: 'whisper',
+      transport: 'multipart',
+      estimatedUnits: 3,
+      maxTotalUnits: 4,
+    }]);
+    assert.equal(brokerRequests[0]!.url, '/v1/job');
+    assert.equal(
+      brokerRequests[0]!.headers['content-type'],
+      'multipart/form-data; boundary=boundary',
+    );
+    assert.equal(brokerRequests[0]!.headers['livepeer-protocol'], 'paid-job/v1');
+    assert.equal(out.jobRef.transport, 'multipart');
+    assert.equal(out.jobRef.brokerJobId, 'broker-job-1');
+  });
+});
 
 test('success: opens one job, sends payment envelope to broker, returns jobRef', async () => {
   await withMockBroker(200, async (brokerUrl, brokerRequests) => {
