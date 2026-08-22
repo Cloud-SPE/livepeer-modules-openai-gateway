@@ -34,6 +34,10 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
+      additional_contexts:
+        # Local-only canonical estimator package; keep the build context
+        # narrow instead of exposing the entire sibling Modules repository.
+        audio_duration: ../livepeer-network-modules/packages/audio-duration
     image: openai-service-gateway:${GATEWAY_TAG:-v1.4.1}
     container_name: openai-service-gateway
     depends_on:
