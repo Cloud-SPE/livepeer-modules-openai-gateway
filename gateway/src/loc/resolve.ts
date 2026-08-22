@@ -6,14 +6,14 @@
 // This helper maps the LOC offering id to the runner-facing model and
 // verifies that the same offering declares the requested transport.
 //
-// Resolution is best-effort: when the catalog is unreachable or the
-// LOC predates extra exposure, it falls back to the operator's
-// LOC_MODEL_MAP and finally to the requested string itself — exactly
-// the pre-dynamic behavior.
+// Resolution is best-effort for ordinary JSON workloads. An endpoint that
+// requires a reproducible client estimator fails closed when the catalog is
+// unavailable or the offering does not advertise the exact supported contract.
 
 import type { RegistryCatalog, RouteCandidate } from '../registry/catalog.js';
 import { inferModel } from '../registry/catalog.js';
 import type { JobTransport } from './client.js';
+import type { LocWorkUnitEstimator } from './client.js';
 
 export interface ResolvedRoute {
   /** Offering id to open the LOC job with. */
@@ -30,6 +30,7 @@ export interface ResolveInput {
   requestedModel: string;
   transport: JobTransport;
   expectedWorkUnit?: string;
+  expectedEstimator?: LocWorkUnitEstimator;
 }
 
 export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> {
@@ -51,6 +52,26 @@ export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> 
     throw new Error(
       `offering ${pick.offering} uses work unit ${pick.workUnit}; expected ${input.expectedWorkUnit}`,
     );
+  }
+  if (input.expectedEstimator) {
+    if (!pick) {
+      throw new Error(
+        `offering ${input.requestedModel} cannot be funded without catalog estimator metadata`,
+      );
+    }
+    const actual = pick.estimator;
+    const expected = input.expectedEstimator;
+    if (
+      !actual ||
+      actual.id !== expected.id ||
+      actual.rounding !== expected.rounding ||
+      actual.exactness !== expected.exactness ||
+      actual.package !== expected.package
+    ) {
+      throw new Error(
+        `offering ${pick.offering} does not advertise the required ${expected.id} estimator contract`,
+      );
+    }
   }
 
   const offering = pick?.offering ?? input.requestedModel;

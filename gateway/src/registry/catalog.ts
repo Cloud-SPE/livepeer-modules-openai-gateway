@@ -12,7 +12,12 @@
 // model→offering on every request, and the snapshot only changes as
 // fast as orchestrator manifests do.
 
-import type { JobTransport, LocCapability, LocClient } from '../loc/client.js';
+import type {
+  JobTransport,
+  LocCapability,
+  LocClient,
+  LocWorkUnitEstimator,
+} from '../loc/client.js';
 
 export const PAID_JOB_PROTOCOL = 'paid-job/v1';
 
@@ -29,6 +34,7 @@ export interface RouteCandidate {
   ethAddress: string;
   pricePerWorkUnitWei: string;
   workUnit: string;
+  estimator?: LocWorkUnitEstimator;
   unitsPerPrice: number;
   quoteId: string;
   quoteVersion: number;
@@ -88,6 +94,7 @@ export function flattenCapabilities(capabilities: LocCapability[]): RouteCandida
         ethAddress: '',
         pricePerWorkUnitWei: offering.pricePerWorkUnitWei ?? '0',
         workUnit: offering.workUnit ?? capability.workUnit ?? '',
+        ...(offering.estimator ? { estimator: { ...offering.estimator } } : {}),
         unitsPerPrice: 1,
         quoteId: '',
         quoteVersion: 0,

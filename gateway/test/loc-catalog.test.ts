@@ -87,3 +87,27 @@ test('flattenCapabilities rejects unknown protocol and missing transports', () =
     { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-job\/v1', transports: [], extra: {} },
   ] }]), /missing job transports/);
 });
+
+test('flattenCapabilities preserves estimator metadata for endpoint funding checks', () => {
+  const [candidate] = flattenCapabilities([{
+    name: 'openai:audio-transcriptions',
+    workUnit: 'seconds',
+    offerings: [{
+      id: 'default',
+      pricePerWorkUnitWei: '100',
+      workUnit: 'seconds',
+      estimator: {
+        id: 'multipart-audio-duration/v1',
+        rounding: 'ceil-to-whole-seconds',
+        exactness: 'exact-or-reject',
+        package: '@livepeer-network/audio-duration',
+        fixtures: null,
+      },
+      protocol: 'paid-job/v1',
+      transports: ['multipart'],
+      extra: {},
+    }],
+  }]);
+  assert.equal(candidate!.estimator?.id, 'multipart-audio-duration/v1');
+  assert.equal(candidate!.estimator?.exactness, 'exact-or-reject');
+});

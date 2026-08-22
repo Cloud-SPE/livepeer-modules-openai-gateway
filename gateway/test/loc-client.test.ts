@@ -370,3 +370,45 @@ test('listCapabilities flattens snake_case payload', async () => {
     },
   );
 });
+
+test('listCapabilities preserves a client-reproducible work-unit estimator', async () => {
+  await withMockLoc(
+    () => ({
+      status: 200,
+      body: {
+        items: [{
+          name: 'openai:audio-transcriptions',
+          work_unit: 'seconds',
+          offerings: [{
+            id: 'default',
+            price_per_work_unit_wei: '100',
+            work_unit: {
+              name: 'seconds',
+              estimator: {
+                id: 'multipart-audio-duration/v1',
+                rounding: 'ceil-to-whole-seconds',
+                exactness: 'exact-or-reject',
+                package: '@livepeer-network/audio-duration',
+                fixtures: 'fixtures/multipart-audio-duration-v1',
+              },
+            },
+            protocol: 'paid-job/v1',
+            job: { transports: ['multipart'] },
+          }],
+        }],
+      },
+    }),
+    async (baseUrl) => {
+      const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
+      const offering = (await client.listCapabilities())[0]!.offerings[0]!;
+      assert.equal(offering.workUnit, 'seconds');
+      assert.deepEqual(offering.estimator, {
+        id: 'multipart-audio-duration/v1',
+        rounding: 'ceil-to-whole-seconds',
+        exactness: 'exact-or-reject',
+        package: '@livepeer-network/audio-duration',
+        fixtures: 'fixtures/multipart-audio-duration-v1',
+      });
+    },
+  );
+});

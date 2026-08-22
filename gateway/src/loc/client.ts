@@ -96,12 +96,21 @@ export interface LocOffering {
   id: string;
   pricePerWorkUnitWei: string | null;
   workUnit: string | null;
+  estimator?: LocWorkUnitEstimator;
   protocol: string;
   transports: JobTransport[];
   /** Merged node+capability extra_json registry metadata (opaque JSON
    * object; e.g. extra.openai.model. Empty
    * object when the LOC predates the extra-exposure change. */
   extra: Record<string, unknown>;
+}
+
+export interface LocWorkUnitEstimator {
+  id: string;
+  rounding: string;
+  exactness: string;
+  package: string | null;
+  fixtures: string | null;
 }
 
 export interface LocCapability {
@@ -277,14 +286,16 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         const offerings = Array.isArray(cap['offerings']) ? cap['offerings'] : [];
         return {
           name: str(cap['name']),
-          workUnit: strOrNull(cap['work_unit']),
+          workUnit: parseWorkUnit(cap['work_unit']).name,
           offerings: offerings.map((o) => {
             const off = asRecord(o);
             const job = asRecord(off['job']);
+            const workUnit = parseWorkUnit(off['work_unit']);
             return {
               id: str(off['id']),
               pricePerWorkUnitWei: strOrNull(off['price_per_work_unit_wei']),
-              workUnit: strOrNull(off['work_unit']),
+              workUnit: workUnit.name,
+              ...(workUnit.estimator ? { estimator: workUnit.estimator } : {}),
               protocol: str(off['protocol']),
               transports: parseJobTransports(job['transports']),
               extra: asRecord(off['extra']),
@@ -324,6 +335,32 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         version: str(raw['version']),
         env: str(raw['env']),
       };
+    },
+  };
+}
+
+function parseWorkUnit(value: unknown): {
+  name: string | null;
+  estimator: LocWorkUnitEstimator | null;
+} {
+  if (typeof value === 'string') return { name: value || null, estimator: null };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { name: null, estimator: null };
+  }
+  const workUnit = asRecord(value);
+  const estimatorRaw = workUnit['estimator'];
+  if (estimatorRaw === undefined || estimatorRaw === null) {
+    return { name: strOrNull(workUnit['name']), estimator: null };
+  }
+  const estimator = asRecord(estimatorRaw);
+  return {
+    name: strOrNull(workUnit['name']),
+    estimator: {
+      id: requireText(estimator['id'], 'work_unit.estimator.id'),
+      rounding: requireText(estimator['rounding'], 'work_unit.estimator.rounding'),
+      exactness: requireText(estimator['exactness'], 'work_unit.estimator.exactness'),
+      package: strOrNull(estimator['package']),
+      fixtures: strOrNull(estimator['fixtures']),
     },
   };
 }

@@ -29,6 +29,13 @@ import { bearerAuth } from './auth.js';
 import { rateLimitV1 } from './rateLimit.js';
 
 const BODY_LIMIT = 100 * 1024 * 1024; // 100 MB
+const REQUIRED_ESTIMATOR = {
+  id: ESTIMATOR,
+  rounding: 'ceil-to-whole-seconds',
+  exactness: 'exact-or-reject',
+  package: '@livepeer-network/audio-duration',
+  fixtures: null,
+} as const;
 
 export async function registerAudioTranscriptionsRoute(
   app: FastifyInstance,
@@ -97,23 +104,38 @@ export async function registerAudioTranscriptionsRoute(
           });
       }
 
+      // Resolve a friendly model id to its offering for the LOC job.
+      // The multipart body is forwarded verbatim (no model rewrite) —
+      // transcription runners are addressed by offering id today.
+      let offering: string;
+      try {
+        ({ offering } = await resolveRoute({
+          catalog: deps.registryCatalog,
+          modelMap: deps.config.locModelMap,
+          capability,
+          requestedModel,
+          transport: 'multipart',
+          expectedWorkUnit: 'seconds',
+          expectedEstimator: REQUIRED_ESTIMATOR,
+        }));
+      } catch {
+        return reply
+          .code(503)
+          .header(HEADER.REQUEST_ID, requestId)
+          .send({
+            error: {
+              message: 'The selected transcription offering does not advertise a supported exact funding estimator.',
+              type: 'service_unavailable_error',
+              code: 'transcription_estimator_unavailable',
+            },
+          });
+      }
+
       const handle = await openReservation(deps, {
         apiKeyId: auth.apiKeyId,
         capability,
         model: requestedModel,
         estimatedWorkUnits: ceilingSeconds,
-      });
-
-      // Resolve a friendly model id to its offering for the LOC job.
-      // The multipart body is forwarded verbatim (no model rewrite) —
-      // transcription runners are addressed by offering id today.
-      const { offering } = await resolveRoute({
-        catalog: deps.registryCatalog,
-        modelMap: deps.config.locModelMap,
-        capability,
-        requestedModel,
-        transport: 'multipart',
-        expectedWorkUnit: 'seconds',
       });
 
       try {

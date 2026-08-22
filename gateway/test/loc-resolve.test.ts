@@ -128,3 +128,69 @@ test('declared endpoint work-unit drift is rejected before LOC open', async () =
     /uses work unit characters; expected tokens/,
   );
 });
+
+const AUDIO_ESTIMATOR = {
+  id: 'multipart-audio-duration/v1',
+  rounding: 'ceil-to-whole-seconds',
+  exactness: 'exact-or-reject',
+  package: '@livepeer-network/audio-duration',
+  fixtures: null,
+};
+
+test('transcription funding requires the exact advertised estimator contract', async () => {
+  const audio = candidate({
+    capability: 'openai:audio-transcriptions',
+    offering: 'default',
+    transports: ['multipart'],
+    workUnit: 'seconds',
+    estimator: AUDIO_ESTIMATOR,
+  });
+  const resolved = await resolveRoute({
+    catalog: catalogOf([audio]),
+    modelMap: {},
+    capability: 'openai:audio-transcriptions',
+    requestedModel: 'default',
+    transport: 'multipart',
+    expectedWorkUnit: 'seconds',
+    expectedEstimator: AUDIO_ESTIMATOR,
+  });
+  assert.equal(resolved.offering, 'default');
+});
+
+test('transcription funding fails closed when LOC drops or changes the estimator', async () => {
+  for (const estimator of [undefined, { ...AUDIO_ESTIMATOR, id: 'unknown/v2' }]) {
+    await assert.rejects(
+      resolveRoute({
+        catalog: catalogOf([candidate({
+          capability: 'openai:audio-transcriptions',
+          offering: 'default',
+          transports: ['multipart'],
+          workUnit: 'seconds',
+          ...(estimator ? { estimator } : {}),
+        })]),
+        modelMap: {},
+        capability: 'openai:audio-transcriptions',
+        requestedModel: 'default',
+        transport: 'multipart',
+        expectedWorkUnit: 'seconds',
+        expectedEstimator: AUDIO_ESTIMATOR,
+      }),
+      /does not advertise the required multipart-audio-duration\/v1 estimator contract/,
+    );
+  }
+});
+
+test('transcription funding fails closed when the LOC catalog is unavailable', async () => {
+  await assert.rejects(
+    resolveRoute({
+      catalog: { inspect: async () => { throw new Error('LOC down'); } },
+      modelMap: {},
+      capability: 'openai:audio-transcriptions',
+      requestedModel: 'default',
+      transport: 'multipart',
+      expectedWorkUnit: 'seconds',
+      expectedEstimator: AUDIO_ESTIMATOR,
+    }),
+    /cannot be funded without catalog estimator metadata/,
+  );
+});
