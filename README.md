@@ -285,7 +285,6 @@ The main groups are:
 - `PUBLIC_PORTAL_URL`
 - `ALLOWED_ORIGINS`
 - `LOG_LEVEL`
-- `GATEWAY_HOST_PORT`
 
 ### Postgres
 
@@ -309,8 +308,7 @@ The main groups are:
 
 ### LOC clearinghouse
 
-- `LOC_BASE_URL` (default `http://localhost:8000` for a shell-run gateway;
-  Compose uses `http://host.docker.internal:8000`)
+- `LOC_BASE_URL` (localhost pilot: `http://127.0.0.1:8088`)
 - `LOC_API_KEY` (required — sent as `X-API-Key`)
 - `LOC_TIMEOUT_MS`
 - `LOC_SETTLE_INTERVAL_MS` (background settler cadence, default 15s)
@@ -378,6 +376,16 @@ credit balance. There is no local resolver / payer daemon to run.
 ```bash
 docker compose up --build
 ```
+
+For the localhost paid-job pilot, use `make pilot`. It reads only the private
+OpenAI credential file from the sibling LOC checkout, runs Compose in the
+foreground, binds the gateway and database to loopback, and gives the gateway
+host networking so LOC's returned `127.0.0.1:8411` broker URL is reachable.
+No service is installed or enabled at host boot.
+
+The pilot currently advertises chat completions only (`default`, unary and
+stream). Transcription fails closed before LOC job open until LOC preserves the
+offering's `multipart-audio-duration/v1` estimator declaration.
 
 Check health:
 

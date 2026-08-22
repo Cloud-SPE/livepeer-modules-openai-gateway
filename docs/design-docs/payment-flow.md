@@ -32,6 +32,8 @@ billed value, and outcome.
 For transcription, the gateway runs the canonical
 `multipart-audio-duration/v1` exact-or-reject estimator before LOC open. It
 rejects an upload that cannot produce an exact positive whole-second ceiling.
+It also requires LOC's catalog to advertise that exact estimator contract;
+missing or unknown metadata fails before the reservation or paid job is opened.
 
 ## Recovery
 

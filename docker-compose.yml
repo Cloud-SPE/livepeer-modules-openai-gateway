@@ -24,6 +24,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-dev-password}
     volumes:
       - openai-service-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-65432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openai_service}"]
       interval: 5s
@@ -43,20 +45,21 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # LOC returns a localhost broker URL for the pilot. Host networking is
+    # required so 127.0.0.1:8411 resolves to that broker, not this container.
+    network_mode: host
     environment:
       # ── server ──
       PORT: "4001"
-      HOST: "0.0.0.0"
-      BASE_URL: ${BASE_URL:-http://localhost:4001}
-      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:4001}
-      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://localhost:4001/portal/}
+      HOST: "127.0.0.1"
+      BASE_URL: ${BASE_URL:-http://127.0.0.1:4001}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://127.0.0.1:4001}
+      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://127.0.0.1:4001/portal/}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
       # ── data ──
-      DATABASE_URL: postgres://${POSTGRES_USER:-openai_service}:${POSTGRES_PASSWORD:-postgres-dev-password}@db:5432/${POSTGRES_DB:-openai_service}
+      DATABASE_URL: postgres://${POSTGRES_USER:-openai_service}:${POSTGRES_PASSWORD:-postgres-dev-password}@127.0.0.1:${POSTGRES_HOST_PORT:-65432}/${POSTGRES_DB:-openai_service}
 
       # ── SaaS shell auth ──
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
@@ -71,7 +74,7 @@ services:
       FROM_EMAIL: ${FROM_EMAIL:-OpenAI Service <noreply@example.com>}
 
       # ── LOC clearinghouse ──
-      LOC_BASE_URL: ${LOC_BASE_URL:-http://host.docker.internal:8000}
+      LOC_BASE_URL: ${LOC_BASE_URL:-http://127.0.0.1:8088}
       LOC_API_KEY: ${LOC_API_KEY:-}
       LOC_TIMEOUT_MS: ${LOC_TIMEOUT_MS:-30000}
       LOC_SETTLE_INTERVAL_MS: ${LOC_SETTLE_INTERVAL_MS:-15000}
@@ -83,8 +86,6 @@ services:
       # ── /v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
-    ports:
-      - "${GATEWAY_HOST_PORT:-4001}:4001"
     restart: "no"
 
 volumes:

@@ -115,7 +115,7 @@ response bodies and local estimates are never settlement evidence.
 ### Config
 
 ```bash
-LOC_BASE_URL=http://localhost:8000      # gateway started in this shell
+LOC_BASE_URL=http://127.0.0.1:8088      # localhost pilot
 LOC_API_KEY=…                           # required; sent as X-API-Key
 LOC_TIMEOUT_MS=30000
 LOC_SETTLE_INTERVAL_MS=15000            # background settler cadence
@@ -152,16 +152,24 @@ $EDITOR .env   # fill every required value, incl. LOC_API_KEY
 # 2. build
 docker compose build gateway
 
-# 3. full stack (db + gateway)
-docker compose up
+# 3. localhost pilot (db + host-networked gateway, foreground)
+make pilot
 ```
 
 There are no daemon sidecars to run. The gateway talks to the separately
-shell-run localhost LOC; confirm reachability before serving users:
+shell-run localhost LOC. Host networking is required because LOC returns a
+`127.0.0.1:8411` broker URL; a normal bridged container would call itself.
+Ports 8088 and 8411 must remain loopback-only. Confirm reachability before
+serving users:
 
 ```bash
 make loc-smoke   # executes a paid job and submits its signed settlement
 ```
+
+The pilot supports `openai:chat-completions/default` over unary and stream.
+Do not advertise transcription as ready: the route returns
+`transcription_estimator_unavailable` before LOC open until LOC propagates the
+canonical estimator metadata.
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.

@@ -7,7 +7,7 @@ connections. Failure modes per step. Graceful shutdown contract.
 
 ```text
 1.  loadConfig()                                                  [throws on bad env]
-      └─ requires LOC_API_KEY (+ LOC_BASE_URL, default loc.cloudspe.com)
+      └─ requires LOC_API_KEY (+ LOC_BASE_URL, pilot default 127.0.0.1:8088)
 
 2.  warn-if-unset peppers (API_KEY_HASH_PEPPER, IP_HASH_PEPPER)    [non-fatal]
 

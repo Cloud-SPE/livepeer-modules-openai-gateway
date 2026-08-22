@@ -11,7 +11,7 @@
 IMAGE ?= tztcloud/openai-service-gateway
 TAG   ?= dev
 
-.PHONY: help install build lint test dev down logs clean smoke loc-smoke web site-ui portal-ui admin-ui \
+.PHONY: help install build lint test dev pilot down logs clean smoke loc-smoke web site-ui portal-ui admin-ui \
         docker-build docker-publish
 
 help:
@@ -22,11 +22,12 @@ help:
 	@echo "  make lint        run tsc / linters across the workspace"
 	@echo "  make test        run all tests"
 	@echo "  make dev         bring up the full local stack via docker compose"
+	@echo "  make pilot       run the localhost paid-job pilot in the foreground"
 	@echo "  make down        tear down dev compose stack"
 	@echo "  make logs        tail dev compose logs"
 	@echo "  make smoke       end-to-end smoke test against the dev stack"
 	@echo "  make loc-smoke   execute and settle a signed paid-job/v1 exchange"
-	@echo "                    (requires LOC_API_KEY; LOC_BASE_URL optional)"
+	@echo "                    (uses the private localhost OpenAI pilot credential)"
 	@echo "  make web         start site + portal + admin dev servers"
 	@echo "  make site-ui     start the site dev server (:3000)"
 	@echo "  make portal-ui   start the portal dev server (:3001)"
@@ -54,6 +55,12 @@ test:
 dev:
 	docker compose up
 
+pilot:
+	@test -f ../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json
+	@LOC_BASE_URL=http://127.0.0.1:8088 \
+	LOC_API_KEY=$$(jq -er '.api_key' ../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json) \
+	docker compose up --build
+
 down:
 	docker compose down
 
@@ -65,6 +72,11 @@ smoke:
 
 loc-smoke:
 	@set -a; [ ! -f .env ] || . ./.env; set +a; \
+	credential=../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json; \
+	if [ -f "$$credential" ]; then \
+		export LOC_BASE_URL=http://127.0.0.1:8088; \
+		export LOC_API_KEY=$$(jq -er '.api_key' "$$credential"); \
+	fi; \
 	cd gateway && pnpm exec tsx ../scripts/loc-smoke.ts
 
 web:

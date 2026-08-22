@@ -344,8 +344,8 @@ sequenceDiagram
 |---|---|
 | OpenAI SDK clients | HTTPS → `/v1/*` |
 | Portal / admin / site users | HTTPS → static SPAs + JSON APIs |
-| LOC clearinghouse | HTTPS + `X-API-Key` (`LOC_BASE_URL`); jobs + settle + capabilities |
-| `capability-broker` (on orch host) | HTTPS, per the Livepeer wire spec (broker URL comes from the LOC job) |
+| LOC clearinghouse | HTTP(S) + `X-API-Key` (`LOC_BASE_URL`); jobs + settle + capabilities |
+| `capability-broker` | HTTP(S), always using the URL returned by the LOC job; localhost pilot returns `127.0.0.1:8411` |
 | `@livepeer-network/audio-duration` | Client package that reproduces an offering's exact transcription funding ceiling; locally linked from the sibling Modules checkout |
 | Postgres | TCP, single DB for all SaaS data |
 | Resend | HTTPS, email delivery (optional in dev) |
@@ -413,8 +413,9 @@ flowchart TB
 ```
 
 The compose stack is just `db` + `gateway` — no daemon sidecars, no
-unix-socket volumes. In dev, the same shape holds: `docker compose up`
-runs gateway + db; each SPA runs via its own `dev-server.js`, serving its
+unix-socket volumes. In the localhost pilot, `make pilot` runs foreground
+Compose with host networking for the gateway so LOC-returned loopback broker
+URLs work. Each SPA runs via its own `dev-server.js`, serving its
 checked-in files locally and proxying API traffic back to the gateway.
 
 ---
