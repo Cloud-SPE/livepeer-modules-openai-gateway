@@ -1,7 +1,12 @@
 // POST /v1/audio/transcriptions — multipart/form-data input, Whisper STT.
-// Work unit: requests (1 per call). Audio duration would be more accurate
-// but isn't recoverable without decoding; the registry can advertise
-// `work_unit=requests` and we record 1.
+// Work unit: whole seconds of uploaded audio. The canonical Modules
+// estimator sizes the LOC funding ceiling before dispatch; it is never
+// settlement evidence. The broker's signed terminal claim remains authoritative.
+
+import {
+  ESTIMATOR,
+  estimateCeilingSecondsFromMultipart,
+} from '@livepeer-network/audio-duration';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -75,11 +80,28 @@ export async function registerAudioTranscriptionsRoute(
           });
       }
 
+      let ceilingSeconds: number;
+      try {
+        ceilingSeconds = transcriptionCeilingSeconds(body, contentType);
+      } catch {
+        return reply
+          .code(400)
+          .header(HEADER.REQUEST_ID, requestId)
+          .send({
+            error: {
+              message:
+                'Audio duration cannot be measured exactly for funding; use a supported container with exact duration metadata.',
+              type: 'invalid_request_error',
+              code: 'audio_duration_inexact_or_unsupported',
+            },
+          });
+      }
+
       const handle = await openReservation(deps, {
         apiKeyId: auth.apiKeyId,
         capability,
         model: requestedModel,
-        estimatedWorkUnits: 1,
+        estimatedWorkUnits: ceilingSeconds,
       });
 
       // Resolve a friendly model id to its offering for the LOC job.
@@ -99,7 +121,8 @@ export async function registerAudioTranscriptionsRoute(
           loc: deps.loc,
           capability,
           offering,
-          estimatedUnits: 1,
+          estimatedUnits: ceilingSeconds,
+          maxTotalUnits: ceilingSeconds,
           maxJobAttempts: deps.config.locJobRetries + 1,
           body,
           contentType,
@@ -108,7 +131,9 @@ export async function registerAudioTranscriptionsRoute(
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         await commitReservation(deps, handle, {
-          workUnits: 1,
+          // The estimator only bounds spend; it is not an observation of
+          // the broker's authoritative terminal usage.
+          workUnits: null,
           statusCode: dispatched.result.status,
         });
         await reply
@@ -130,6 +155,16 @@ export async function registerAudioTranscriptionsRoute(
       }
     },
   );
+}
+
+export const TRANSCRIPTION_ESTIMATOR_ID = ESTIMATOR;
+
+export function transcriptionCeilingSeconds(body: Uint8Array, contentType: string): number {
+  const seconds = estimateCeilingSecondsFromMultipart(body, contentType);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) {
+    throw new Error(`${ESTIMATOR} returned a non-positive or unsafe ceiling`);
+  }
+  return seconds;
 }
 
 function brokerStatus(err: unknown): number {

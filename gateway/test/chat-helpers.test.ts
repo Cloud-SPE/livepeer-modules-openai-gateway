@@ -7,6 +7,10 @@ import {
   pickModel,
 } from '../src/proxy/chat.js';
 import { textCodePoints } from '../src/proxy/audio-speech.js';
+import {
+  TRANSCRIPTION_ESTIMATOR_ID,
+  transcriptionCeilingSeconds,
+} from '../src/proxy/audio-transcriptions.js';
 import { imageCount } from '../src/proxy/images.js';
 import { embeddingFunding } from '../src/proxy/embeddings.js';
 
@@ -47,7 +51,42 @@ describe('paid-job funding', () => {
     assert.ok(funding.maxTotalUnits >= funding.estimatedUnits);
     assert.equal(funding.maxTotalUnits, Buffer.byteLength('hello 😀', 'utf8'));
   });
+
+  it('uses the canonical exact multipart audio ceiling for transcription', () => {
+    const wav = wavPcm(8_000, 4_000);
+    const prefix = Buffer.from(
+      '--b\r\nContent-Disposition: form-data; name="file"; filename="sample.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n',
+    );
+    const body = Buffer.concat([prefix, wav, Buffer.from('\r\n--b--\r\n')]);
+    assert.equal(TRANSCRIPTION_ESTIMATOR_ID, 'multipart-audio-duration/v1');
+    assert.equal(
+      transcriptionCeilingSeconds(body, 'multipart/form-data; boundary=b'),
+      1,
+    );
+    assert.throws(() =>
+      transcriptionCeilingSeconds(Buffer.from('not audio'), 'application/octet-stream'),
+    );
+  });
 });
+
+function wavPcm(sampleRate: number, samples: number): Buffer {
+  const dataSize = samples * 2;
+  const out = Buffer.alloc(44 + dataSize);
+  out.write('RIFF', 0, 'ascii');
+  out.writeUInt32LE(36 + dataSize, 4);
+  out.write('WAVEfmt ', 8, 'ascii');
+  out.writeUInt32LE(16, 16);
+  out.writeUInt16LE(1, 20);
+  out.writeUInt16LE(1, 22);
+  out.writeUInt32LE(sampleRate, 24);
+  out.writeUInt32LE(sampleRate * 2, 28);
+  out.writeUInt16LE(2, 32);
+  out.writeUInt16LE(16, 34);
+  out.write('data', 36, 'ascii');
+  out.writeUInt32LE(dataSize, 40);
+  return out;
+}
 
 describe('parseTotalTokens', () => {
   it('extracts usage.total_tokens from a string body', () => {
