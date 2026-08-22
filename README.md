@@ -36,7 +36,7 @@ This repo contains:
 
 This repo holds no chain keys and never talks to the chain directly. It
 delegates route selection and payment minting to the **LOC — Livepeer
-Open Clearinghouse** (`https://loc.cloudspe.com` by default), reached
+Open Clearinghouse** (the sibling localhost service during development), reached
 over HTTPS with an `X-API-Key` header.
 
 ## Why It Exists
@@ -47,8 +47,7 @@ Livepeer network:
 - open a job per request — the LOC selects a route AND mints the
   payment envelope in one call
 - forward OpenAI-shaped requests to the broker the LOC returns
-- settle actual usage afterwards so the LOC refunds the unused part of
-  each estimate
+- retrieve broker-signed terminal evidence and settle it through LOC
 - preserve enough job / route metadata for auditing and debugging
 
 It is intentionally opinionated:
@@ -92,7 +91,7 @@ flowchart LR
   ADMIN[web/admin] -->|served by gateway| GW
 
   GW --> DB[(Postgres)]
-  GW -->|jobs + settle| LOC[LOC clearinghouse]
+  GW -->|idempotent jobs + signed settle| LOC[LOC clearinghouse]
   GW --> BROKER[capability-broker]
   BROKER --> WORKER[capability worker]
   GW --> EMAIL[Resend]
@@ -110,9 +109,10 @@ flowchart TD
   D --> F[Dispatch to broker with Livepeer-Payment]
   F --> G[Capability worker executes]
   G --> H[Gateway returns response]
-  H --> I[Commit or refund reservation + enqueue settle intent]
-  I --> K[Background settler reports actual units to LOC]
-  K --> J[Portal and admin can inspect usage]
+  H --> I[Record request outcome]
+  I --> K[Retrieve and persist signed broker evidence]
+  K --> L[Background settler submits evidence to LOC]
+  L --> J[Portal and admin can inspect accounting]
 ```
 
 ## Process Flow
@@ -127,13 +127,13 @@ sequenceDiagram
 
   C->>G: POST /v1/*
   G->>DB: validate key + open usage_reservations row
-  G->>L: POST /v1/jobs {capability, offering, estimated_units}
-  L-->>G: {job_id, broker_url, mode, payment_envelope, ...}
-  G->>B: forward request + Livepeer-Payment header
+  G->>L: POST /v1/jobs<br/>Idempotency-Key + transport + ceiling
+  L-->>G: {job_id, request_id, work_id, protocol,<br/>transport, work_unit, broker_url, payment_envelope}
+  G->>B: POST /v1/job<br/>protocol + request ID + payment
   B-->>G: response or stream
-  G->>DB: commit or refund reservation + enqueue settle intent
+  G->>DB: record response outcome and broker job ID
   G-->>C: OpenAI-shaped response
-  Note over G,L: background settler later POSTs<br/>/v1/jobs/{id}/settle {actual_units, outcome}
+  Note over G,L: background lookup persists signed evidence;<br/>settler submits the exact claim to LOC
 ```
 
 ## Data Model
@@ -197,7 +197,8 @@ erDiagram
   MODELS {
     text model_id PK
     text capability
-    text interaction_mode
+    text protocol
+    jsonb transports
     text provider
     boolean active
     timestamptz snapshot_at
@@ -308,12 +309,13 @@ The main groups are:
 
 ### LOC clearinghouse
 
-- `LOC_BASE_URL` (default `https://loc.cloudspe.com`)
+- `LOC_BASE_URL` (default `http://localhost:8000` for a shell-run gateway;
+  Compose uses `http://host.docker.internal:8000`)
 - `LOC_API_KEY` (required — sent as `X-API-Key`)
 - `LOC_TIMEOUT_MS`
 - `LOC_SETTLE_INTERVAL_MS` (background settler cadence, default 15s)
-- `LOC_SETTLE_MAX_ATTEMPTS` (per-job settle retries, default 20)
-- `LOC_JOB_RETRIES` (job-open retries on 429/5xx/mode-mismatch, default 2)
+- `LOC_SETTLE_ALERT_ATTEMPTS` (retry alert threshold, default 20; no abandonment)
+- `LOC_OPEN_MAX_ATTEMPTS` (identical idempotent job-open attempts, default 3)
 
 ### Refresh and rate limiting
 
@@ -374,7 +376,7 @@ credit balance. There is no local resolver / payer daemon to run.
 ### 3. Start the backend stack
 
 ```bash
-docker compose up -d --build
+docker compose up --build
 ```
 
 Check health:
@@ -436,7 +438,7 @@ make smoke
 - the playground uses the real `/v1/*` endpoints
 - speech voice options are derived from published model metadata when a
   speech model advertises them
-- `make loc-smoke` opens a 1-unit job and settles 0 against the live LOC
+- `make loc-smoke` executes a paid job, retrieves signed evidence, and settles LOC
 - admin and portal health are intentionally different:
   - portal: concise user-facing availability
   - admin: operator-facing capability, LOC, and catalog diagnostics
@@ -448,9 +450,9 @@ For production deployment, use [DEPLOYMENT.md](./DEPLOYMENT.md).
 The important operational constraints are:
 - the LOC must be reachable and `LOC_API_KEY` valid before serving `/v1/*`
 - the LOC account must hold enough credit balance for the estimate
-  charged at job issuance
+  funded ceiling reserved at job issuance
 - the DB migrations must run before serving traffic
-- the background settler must keep up so refunds aren't delayed
+- evidence lookup and signed settlement backlogs must remain observable
 - public `/v1/models` depends on a fresh LOC-backed cache
 
 ## What Else Is Worth Documenting
@@ -461,11 +463,11 @@ value:
   - stale model cache
   - LOC reachable but no offerings for a capability
   - LOC job-open failures / insufficient credit balance
-  - settle backlog growing (refunds delayed)
-  - broker failures vs LOC mode mismatches
+  - settlement lookup or LOC settlement backlog growing
+  - broker failures vs protocol/transport/work-unit drift
 - a capability-by-capability product matrix:
   - request shape
-  - interaction mode
+  - protocol and transports
   - work unit
   - expected model metadata
   - known caveats
@@ -475,7 +477,7 @@ value:
   - model id
   - LOC job / work id
   - payment envelope
-  - settle intent
+  - signed settlement evidence
 - a troubleshooting page for local development:
   - LOC API key / reachability
   - empty `/v1/models`

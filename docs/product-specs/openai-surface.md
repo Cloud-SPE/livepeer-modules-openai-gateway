@@ -116,9 +116,8 @@ a bug, not a deliberate gap.
 - **Stripe metadata in errors** (`error.code: rate_limit_exceeded`
   matches, but we don't carry headers like
   `X-RateLimit-Remaining`).
-- **`stream_options` other than `include_usage`.** We accept and
-  forward whatever the client sends, but only `include_usage`
-  affects our settlement.
+- **Gateway interpretation of `stream_options`.** The object is forwarded
+  unchanged. No response-body field affects network settlement.
 - **Idempotency-Key header.** Duplicate POSTs create duplicate
   upstream work.
 - **Per-model latency / token-rate guarantees.** Performance reflects

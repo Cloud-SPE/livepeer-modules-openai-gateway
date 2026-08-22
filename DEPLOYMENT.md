@@ -102,25 +102,25 @@ daemons. It delegates route selection and payment minting to the LOC
 (Livepeer Open Clearinghouse). Per `/v1/*` request the gateway:
 
 1. opens a job (`POST /v1/jobs {capability, offering, estimated_units}`);
-   the LOC selects a route, mints the payment envelope, and charges the
-   operator's credit balance the **full estimate** at issuance;
+   the LOC selects a route, mints the payment envelope, and encumbers the
+   funded ceiling;
 2. forwards the request to the returned `broker_url` with the
    `payment_envelope` in the `Livepeer-Payment` header;
-3. settles actual usage afterwards (`POST /v1/jobs/{id}/settle
-   {actual_units, outcome}`), and the LOC refunds the unused part.
+3. retrieves the broker's signed terminal claim independently and submits
+   that exact evidence to `POST /v1/jobs/{id}/settle`.
 
-Settlement runs in a durable background task, so a missed settle only
-over-pays the estimate — it is never lost.
+Claim lookup and LOC settlement run in durable background tasks. Gateway
+response bodies and local estimates are never settlement evidence.
 
 ### Config
 
 ```bash
-LOC_BASE_URL=https://loc.cloudspe.com   # default
+LOC_BASE_URL=http://localhost:8000      # gateway started in this shell
 LOC_API_KEY=…                           # required; sent as X-API-Key
 LOC_TIMEOUT_MS=30000
 LOC_SETTLE_INTERVAL_MS=15000            # background settler cadence
-LOC_SETTLE_MAX_ATTEMPTS=20              # per-job settle retries
-LOC_JOB_RETRIES=2                       # job-open retries on 429/5xx/mode-mismatch
+LOC_SETTLE_ALERT_ATTEMPTS=20            # alert threshold; retries do not abandon
+LOC_OPEN_MAX_ATTEMPTS=3                 # identical idempotent open attempts
 ```
 
 ### Funding
@@ -153,14 +153,14 @@ $EDITOR .env   # fill every required value, incl. LOC_API_KEY
 docker compose build gateway
 
 # 3. full stack (db + gateway)
-docker compose up -d
+docker compose up
 ```
 
-There are no daemon sidecars to run. The gateway talks to the external
-LOC over HTTPS; confirm reachability before serving users:
+There are no daemon sidecars to run. The gateway talks to the separately
+shell-run localhost LOC; confirm reachability before serving users:
 
 ```bash
-make loc-smoke   # opens a 1-unit job and settles 0 against the live LOC
+make loc-smoke   # executes a paid job and submits its signed settlement
 ```
 
 After startup the gateway is real. Don't ship to users until you've
@@ -204,7 +204,7 @@ Validate end-to-end against a real orchestrator:
    check `docker compose logs gateway` — it logs the LOC job it opened
    and the broker it forwarded to.
 
-4. **Confirm the reservation row committed and enqueued a settle**:
+4. **Confirm the gateway outcome, signed claim, and LOC settlement**:
 
    ```bash
    docker compose exec db psql -U openai_service -c \
@@ -221,9 +221,9 @@ Validate end-to-end against a real orchestrator:
       FROM usage_reservations ORDER BY created_at DESC LIMIT 5;"
    ```
 
-   The latest row should be `state=committed` with a non-null
-   `committed_work_units`, a populated `loc_job_id`, and `settle_state`
-   moving from `pending` to `settled` once the background settler runs.
+   The latest row should be `state=committed`, have all paid-job identities,
+   capture `settlement_envelope`, and move `settle_state` from `pending` to
+   `settled`. `committed_work_units` is not accounting authority.
 
 5. **Confirm the models cache populated from the LOC catalog**:
 
@@ -231,7 +231,8 @@ Validate end-to-end against a real orchestrator:
    docker compose exec db psql -U openai_service -c \
      "SELECT model_id,
              capability,
-             interaction_mode,
+             protocol,
+             transports,
              active
       FROM models
       WHERE active = true
@@ -323,9 +324,9 @@ docker compose exec -T db pg_dump -U openai_service \
   openai_service > openai_service-$(date +%F).pgdump
 ```
 
-Drive this from cron or a systemd timer; encrypt and ship to S3 /
-GCS / Backblaze. Keep at least 7 days of point-in-time backups
-locally + 30 days off-site.
+Run this explicitly from a managed shell when a backup is needed; encrypt and
+ship it to S3 / GCS / Backblaze. This localhost deployment does not install
+cron entries, systemd units, or host-boot services.
 
 ### Restore
 
@@ -448,7 +449,7 @@ Recommended starter alerts:
 - `proxy_reservations_total{outcome="refunded"}` rising sharply
   vs `committed`
 - `pendingSettlements` (from `/health`) climbing — the settler can't
-  reach the LOC; refunds are delayed
+  reach the LOC; signed settlement is delayed
 - Event-loop lag > 100ms p95
 
 ---
@@ -460,8 +461,8 @@ Recommended starter alerts:
 git fetch origin && git checkout v1.x
 docker compose build gateway
 
-# 2. Apply
-docker compose up -d gateway
+# 2. Apply in a managed foreground shell
+docker compose up gateway
 
 # 3. Watch for clean boot:
 docker compose logs -f gateway
@@ -482,7 +483,7 @@ If the new gateway image misbehaves:
 ```bash
 git checkout v1.previous
 docker compose build gateway
-docker compose up -d gateway
+docker compose up gateway
 ```
 
 Watch out for **migration rollback**: a forward migration that's
@@ -501,7 +502,7 @@ undoes it (don't edit history).
 | `/v1/models` returns empty `data: []` | LOC advertises no offerings, or catalog refresh hasn't run yet | gateway logs; `GET /admin/registry/loc`; wait one refresh cycle |
 | Every `/v1/*` returns 503 | LOC unreachable or job-open failing | gateway logs (logs each opened job + retries) |
 | `/v1/*` errors with insufficient funds | LOC credit balance exhausted | `GET /admin/registry/loc` (balance); top up in the LOC portal |
-| `/health` `pendingSettlements` climbing | Settler can't reach the LOC; refunds delayed (not lost) | gateway logs; LOC reachability |
+| `/health` `pendingSettlements` climbing | Settler can't reach the LOC; signed settlement delayed (not lost) | gateway logs; LOC reachability |
 | Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — search for `verification email send failed` |
 | Operator can't log into admin | ADMIN_TOKEN env var missing or mismatched | `docker compose exec gateway env | grep ADMIN_TOKEN` |
 | Sudden 503s after redeploy | Migration hung the gateway boot | gateway logs — last `[migrations]` line |

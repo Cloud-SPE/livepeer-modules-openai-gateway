@@ -63,7 +63,7 @@ SQL; the LOC health probe is best-effort and bounded.
 | 5 | LOC probe failure is **non-fatal** — boot logs a warning and continues | Operator fixes LOC reachability / `LOC_API_KEY`; `/health` and `/v1/*` recover when the LOC does |
 | 9 | Throws if a route registration is malformed (a code bug) | Fix code |
 | 10 | Logs and continues — refresh task survives one failure and tries again | Operator addresses LOC catalog issue; refresh recovers itself |
-| 11 | Logs and continues — settler retries pending intents each tick | Operator addresses LOC reachability; refunds drain once it's back |
+| 11 | Logs and continues — settler retries signed pending claims each tick | Operator addresses LOC reachability; settlement drains once it is back |
 | 12 | Process exits with EADDRINUSE | Free the port |
 
 ## Graceful shutdown
@@ -73,7 +73,7 @@ SQL; the LOC health probe is best-effort and bounded.
 ```text
 1. log "shutting down"
 2. cancelRefresh()           — stop the catalog refresh interval
-3. cancelSettler()           — stop the settle-intent drain loop
+3. cancelSettler()           — stop the signed-settlement drain loop
 4. rateLimiter.stop()        — clear the evict interval
 5. registryCatalog.close?.() — release any catalog resources
 6. app.close()               — stop accepting + drain in-flight

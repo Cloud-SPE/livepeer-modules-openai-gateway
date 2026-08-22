@@ -1,23 +1,18 @@
 # Plan 0007 — paid-job/v1 migration
 
-Migrate the OpenAI gateway from the v0 interaction modes to the breaking
-Livepeer Modules 2.0 `paid-job/v1` and matching LOC contracts.
+Complete the breaking Livepeer Modules 2.0 `paid-job/v1` and matching LOC
+contracts with no compatibility path.
 
 **Beads epic:** `lmoa-3bv`
 
 ## Context
 
-Livepeer Modules 2.0 replaces `http-reqresp@v0`, `http-stream@v0`, and
-`http-multipart@v0` with one paid-job protocol and a per-request transport.
+Livepeer Modules 2.0 defines one paid-job protocol with a per-request transport.
 It makes broker open idempotency and signed usage settlement normative. The
 LOC team is simultaneously replacing its handoff and settlement shapes.
 
-The gateway currently contains workarounds for the missing v0 guarantees:
-mode inference and mismatch retries, fresh paid jobs after ambiguous opens,
-zero-unit compensating settles, stream request mutation, response-body usage
-scraping, and a settlement queue that lacks signed evidence. Retrofitting the
-broker seam crosses catalog, LOC, proxy, persistence, operations, and UI, so
-the work requires an execution plan.
+The retrofit crosses catalog, LOC, proxy, persistence, operations, and UI, so
+the work is tracked as one execution plan and Beads epic.
 
 The binding gateway interpretation is
 [paid-job-v1.md](../../design-docs/paid-job-v1.md).
@@ -39,7 +34,8 @@ Out of scope:
 
 - backward compatibility, dual-stack flags, or fallback to v0;
 - capability runner implementations;
-- importing or vendoring Modules or LOC source;
+- importing or vendoring broker, daemon, worker, or LOC implementations (the
+  public client-side audio estimator package is the narrow exception);
 - customer billing or price/rate-card behavior;
 - paid-session live-media work;
 - fixing payer-side `INVALID_RECIPIENT_RAND` rotation.
@@ -67,12 +63,12 @@ Out of scope:
 
 ### Phase 2 — build the independent seam
 
-- [x] Replace catalog interaction modes with protocol and transports
+- [x] Consume the catalog's required protocol and transport fields
   (`lmoa-3bv.7`).
-- [ ] Implement the v2 LOC reservation client (`lmoa-3bv.8`).
+- [x] Implement the v2 LOC reservation client (`lmoa-3bv.8`).
 - [x] Implement the broker `POST /v1/job` transport client
   (`lmoa-3bv.9`).
-- [ ] Migrate durable reservation and settlement evidence storage
+- [x] Migrate durable reservation and settlement evidence storage
   (`lmoa-3bv.10`).
 
 These changes can proceed while the external teams close Phase 1 blockers.
@@ -81,17 +77,17 @@ for the unresolved financial terminal states.
 
 ### Phase 3 — accounting and OpenAI endpoints
 
-- [ ] Implement authoritative settlement lookup and durable LOC settlement
+- [x] Implement authoritative settlement lookup and durable LOC settlement
   (`lmoa-3bv.11`).
-- [ ] Implement accounting-only replay and `upstream_response_lost`
+- [x] Implement accounting-only replay and `upstream_response_lost`
   (`lmoa-3bv.12`).
-- [ ] Migrate unary/multipart endpoints (`lmoa-3bv.13`).
-- [ ] Migrate streaming chat without buffering (`lmoa-3bv.14`).
+- [x] Migrate unary/multipart endpoints (`lmoa-3bv.13`).
+- [x] Migrate streaming chat without buffering (`lmoa-3bv.14`).
 - [ ] Configure endpoint units, estimates, and ceilings (`lmoa-3bv.15`).
 
 ### Phase 4 — prove and cut over
 
-- [ ] Replace mode-based diagnostics (`lmoa-3bv.16`).
+- [x] Replace mode-based diagnostics (`lmoa-3bv.16`).
 - [ ] Build v2 mock contract regressions (`lmoa-3bv.17`).
 - [ ] Run signed registry → broker → gateway → LOC conformance
   (`lmoa-3bv.18`).
@@ -135,9 +131,11 @@ for the unresolved financial terminal states.
 
 - **2026-08-21 — breaking cutover.** Carrying v0 would preserve exactly the
   ambiguous-open and usage workarounds the new contract removes.
-- **2026-08-21 — no external source dependency.** The gateway consumes HTTP
-  contracts and exported conformance behavior. Upstream revisions are release
-  gates, not libraries linked into this repository.
+- **2026-08-21 — external implementations remain behind HTTP.** Upstream
+  revisions are conformance release gates, not imported broker/daemon/LOC
+  implementations. The reproducible transcription ceiling is different: the
+  gateway intentionally consumes Modules' public
+  `@livepeer-network/audio-duration` client package.
 - **2026-08-21 — accounting-only replay.** Finish accounting for the original
   job and return `upstream_response_lost`; never auto-resubmit paid work.
 - **2026-08-21 — settlement query on all transports.** Signed lookup is the

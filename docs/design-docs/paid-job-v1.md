@@ -1,13 +1,13 @@
 # paid-job/v1 gateway contract
 
-Status: **Drafted** — binding for the migration, not yet exercised end to end.
+Status: **Implemented locally** — binding for the migration, pending joint
+end-to-end conformance with LOC and Modules.
 
 This document defines how the OpenAI gateway consumes Livepeer Modules 2.0
-`paid-job/v1` and the corresponding LOC job API. It supersedes the broker-seam
-decisions in [payment-flow.md](./payment-flow.md),
+`paid-job/v1` and the corresponding LOC job API. It is the only active
+broker-seam contract; [payment-flow.md](./payment-flow.md),
 [route-selector.md](./route-selector.md), and
-[streaming-usage.md](./streaming-usage.md) when the migration cuts over. Those
-documents continue to describe the running v0 code until it is removed.
+[streaming-usage.md](./streaming-usage.md) describe its operational views.
 
 The migration is intentionally breaking. There is no dual protocol, feature
 flag, fallback parser, or backward-compatible broker path.
@@ -23,8 +23,10 @@ The gateway depends on two external HTTP contracts:
 
 Capability runners, broker middleware, settlement verification code, and LOC
 accounting remain external. We pin release-ready revisions and run conformance
-against them; we do not vendor their source or add build/runtime dependencies
-on either repository.
+against them; we do not vendor those implementations. The one intentional
+code dependency is Modules' public `@livepeer-network/audio-duration` client
+estimator, because a transcription buyer must reproduce the advertised exact
+funding ceiling before opening a job.
 
 ## Binding decisions
 
@@ -40,9 +42,7 @@ Catalog offerings must declare `protocol: paid-job/v1` and their supported
 | File upload | `multipart` via `Content-Type: multipart/form-data` |
 
 The broker request is `POST /v1/job` with `Livepeer-Protocol:
-paid-job/v1`. `Livepeer-Mode`, `Livepeer-Spec-Version`, `/v1/cap`, mode
-guessing, mode-specific offerings, and mode-mismatch job replacement do not
-exist in the new path. An undeclared transport is a typed
+paid-job/v1`. There is no compatibility path or protocol fallback. An undeclared transport is a typed
 `protocol_transport_unsupported` refusal before broker payment side effects.
 
 ### Identity is durable and layered
@@ -99,18 +99,19 @@ price, quote, and route/constraint identity must not drift. Independently, LOC
 must be able to retrieve the same signed record by its stable
 `broker_request_id`; otherwise an untrusted caller can hide
 `Livepeer-Job-Id` and prevent reconciliation. Modules `3999acc` provides
-`GET /v1/exchange/{request_id}` for this purpose. LOC integration and joint
-restart conformance remain P0 under `lmoa-3bv.23`; the gateway does not become
-the source of truth.
+`GET /v1/exchange/{request_id}` for this purpose, and LOC `6aa2d49` integrates
+it. Joint restart conformance remains P0 under `lmoa-3bv.23`; the gateway does
+not become the source of truth.
 
-The earlier 24-hour terminal-retention agreement is superseded by
-`paid-job` 1.0.12-draft, which requires retention for maximum envelope
-spendable life plus a dispute/recovery window. Because governance can revive
-an issued ticket, that maximum is not finite under the deployed contract. The
-teams must define an enforceable deletion/acknowledgement rule under
-`lmoa-3bv.24`. Independently of that decision, the gateway persists a lookup
-intent as soon as it knows the broker job id and retries without the bounded
-`LOC_SETTLE_MAX_ATTEMPTS` budget. Once the complete signed claim is stored
+The earlier fixed 24-hour terminal-retention agreement is superseded by
+`paid-job` 1.0.14-draft. Retention is operational: it must exceed LOC's
+conservative-charge deadline plus the consumer outage/recovery window and
+scheduler margin. In-flight and accounting-pending records cannot be evicted,
+and an admission tombstone must outlive detailed evidence so eviction cannot
+manufacture `NOT_ADMITTED`. LOC configuration plus joint restart/eviction
+conformance remain under `lmoa-3bv.24`. Independently, the gateway persists a
+lookup intent as soon as LOC returns the stable request identity and retries
+without an abandonment budget. Once the complete signed claim is stored
 locally, subsequent LOC retries no longer depend on broker retention.
 
 `DEBIT_FAILED` is an accounting fault, not successful settlement. The gateway
@@ -125,9 +126,9 @@ window still requires alignment under `lmoa-3bv.22`.
 
 ### Streaming remains non-buffering
 
-The gateway forwards SSE bytes as they arrive. It does not inject
-`stream_options.include_usage`, accumulate the transcript, or delay output for
-accounting. Once response headers yield the broker job id, that identity is
+The gateway forwards SSE bytes as they arrive without mutating the request,
+accumulating the transcript, or parsing response usage for accounting. Once
+response headers yield the broker job id, that identity is
 persisted. Normal completion, broker termination at the funded ceiling,
 client disconnect, and mid-stream failure all schedule settlement lookup and
 LOC accounting independently of the client connection.
@@ -238,7 +239,9 @@ These block release, but not the independent catalog/client/schema retrofit:
    minutes. Coordination: `lmoa-3bv.22`.
 
 The release gate pins immutable upstream revisions only after these contracts
-land. Pinning does not introduce a source dependency.
+land. Those pins gate joint behavior; they do not import broker, daemon, or LOC
+implementation code into this gateway. The audio estimator is the explicit,
+narrow exception described above.
 
 ## Resolved upstream contracts
 
@@ -257,17 +260,15 @@ land. Pinning does not introduce a source dependency.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `3999acc`, including
-  durable debit retry `818430c`, transcription extractor `12fa0db`, and payment
-  conditional expiry corrections, signed `NOT_ADMITTED`, and the final
-  four-outcome policy and request-id exchange lookup in `paid-job`
-  1.0.13-draft. Local verification
-  passed 39/39 protocol conformance tests, 19/19 capability-broker smoke
-  assertions, the payment daemon Go test suite, and the current sender tests.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `73e523d`. Expiry telemetry
-  persistence landed at `d7ae387`; signed `DEBIT_FAILED` rejection landed at
-  `258b36e`; the four-outcome recovery decision is recorded without adding an
-  unsafe automatic refund path.
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `cedef80`.
+  It includes request-id exchange recovery, corrected operational retention
+  and admission tombstones, the canonical client estimator and registry
+  propagation, and a restartable localhost integration stack.
+- LOC branch `tasks/lpm-v2`: reviewed committed head `a9a556c`. It includes
+  request-id recovery, conservative unresolved-job finalization, payer validity
+  telemetry, and signed funding-ceiling enforcement. Its catalog projection
+  still does not expose Modules' estimator metadata; that release gate is
+  tracked by `lmoa-3bv.26`.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 
