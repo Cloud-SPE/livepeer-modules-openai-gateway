@@ -36,7 +36,7 @@ class CcUsage extends LitElement {
                   <th>API key</th>
                   <th>Total</th>
                   <th>Committed</th>
-                  <th>Refunded</th>
+                  <th>Failed</th>
                   <th>Last used</th>
                 </tr>
               </thead>
@@ -47,7 +47,7 @@ class CcUsage extends LitElement {
                     <td><code>${r.apiKeyId.slice(0, 8)}…</code></td>
                     <td>${r.totalRequests}</td>
                     <td>${r.committedTotal}</td>
-                    <td>${r.refundedTotal}</td>
+                    <td>${r.failedTotal}</td>
                     <td>${r.lastUsedAt ? new Date(r.lastUsedAt).toLocaleString() : ''}</td>
                   </tr>`,
                 )}

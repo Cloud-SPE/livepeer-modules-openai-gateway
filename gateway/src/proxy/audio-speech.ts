@@ -15,7 +15,7 @@ import {
   openReservation,
   recordPaidJob,
   recordSelectedRoute,
-  refundReservation,
+  failReservation,
 } from './reservation.js';
 import { bearerAuth } from './auth.js';
 import { rateLimitV1 } from './rateLimit.js';
@@ -97,7 +97,7 @@ export async function registerAudioSpeechRoute(
       } catch (err) {
         const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
-        await refundReservation(deps, handle, {
+        await failReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
         });

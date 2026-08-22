@@ -15,7 +15,7 @@ import {
 
 import { apiKeys } from './apiKeys.js';
 
-// One row per /v1/* proxy request. The open/committed/refunded state is the
+// One row per /v1/* proxy request. The open/committed/failed state is the
 // customer-visible gateway outcome used by admin reporting; it is deliberately
 // separate from broker evidence and LOC settlement state below.
 
@@ -135,7 +135,7 @@ export const usageReservations = pgTable(
     locRequestIdIdx: uniqueIndex('idx_usage_reservations_loc_request_id').on(t.locRequestId),
     stateCheck: check(
       'usage_reservations_state_check',
-      sql`${t.state} IN ('open', 'committed', 'refunded')`,
+      sql`${t.state} IN ('open', 'committed', 'failed')`,
     ),
     protocolCheck: check(
       'usage_reservations_job_protocol_check',

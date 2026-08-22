@@ -16,7 +16,7 @@ const UsageSummaryRow = z
     email: z.string(),
     totalRequests: z.number(),
     committedTotal: z.number(),
-    refundedTotal: z.number(),
+    failedTotal: z.number(),
     lastUsedAt: Timestamp.nullable(),
   })
   .meta({ id: 'AdminUsageRow' });
@@ -54,7 +54,7 @@ export async function registerAdminUsageRoutes(
           email: s.email,
           totalRequests: s.totalRequests,
           committedTotal: s.committedTotal,
-          refundedTotal: s.refundedTotal,
+          failedTotal: s.failedTotal,
           lastUsedAt: s.lastUsedAt,
         })),
         recent: recent.map(({ reservation: r, email }) => ({
@@ -100,7 +100,7 @@ export async function registerAdminUsageRoutes(
           settleAttempts: r.settleAttempts,
           terminalEvidenceType: r.terminalEvidenceType as
             | 'not_admitted' | 'outcome_unknown' | 'evidence_expired' | 'debit_failed' | null,
-          state: r.state as 'open' | 'committed' | 'refunded',
+          state: r.state as 'open' | 'committed' | 'failed',
           committedWorkUnits: r.committedWorkUnits,
           latencyMs: r.latencyMs,
           statusCode: r.statusCode,

@@ -20,7 +20,7 @@ import {
   openReservation,
   recordPaidJob,
   recordSelectedRoute,
-  refundReservation,
+  failReservation,
   type ReservationHandle,
 } from './reservation.js';
 import { bearerAuth } from './auth.js';
@@ -118,7 +118,7 @@ export async function registerChatRoute(
       } catch (err) {
         const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
-        await refundReservation(deps, handle, {
+        await failReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
         });
@@ -161,7 +161,7 @@ async function runStreaming(
   } catch (err) {
     const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
     if (candidate) await recordSelectedRoute(deps, input.handle, candidate);
-    await refundReservation(deps, input.handle, {
+    await failReservation(deps, input.handle, {
       statusCode: brokerStatus(err),
       errorText: (err as Error).message ?? 'unknown',
     });
@@ -197,7 +197,7 @@ async function runStreaming(
 
   if (streamErr) {
     req.log.warn({ err: streamErr, requestId: input.requestId }, 'chat stream ended with error');
-    await refundReservation(deps, input.handle, {
+    await failReservation(deps, input.handle, {
       statusCode: dispatched.result.status,
       errorText: (streamErr as Error).message ?? 'stream_error',
     });

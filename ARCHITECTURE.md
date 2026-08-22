@@ -150,7 +150,7 @@ erDiagram
     text model
     text broker_url
     text eth_address
-    text state "open|committed|refunded"
+    text state "open|committed|failed"
     bigint estimated_work_units
     bigint committed_work_units
     numeric price_per_work_unit_wei
@@ -193,7 +193,7 @@ columns that drive the durable settler).
 
 ### Why the state machine on `usage_reservations`
 
-`open → committed | refunded` records the customer-visible gateway outcome;
+`open → committed | failed` records the customer-visible gateway outcome;
 it is not network accounting evidence. Broker settlement lookup persists the
 complete signed claim and only then sets `settle_state='pending'`. The
 background settler submits that exact claim to LOC. Gateway observations,
@@ -275,7 +275,7 @@ sequenceDiagram
     GW->>DB: state='committed'; persist broker job ID
     GW-->>C: response (200, SSE or JSON)
   else upstream failure
-    GW->>DB: state='refunded', error_text=…<br/>accounting remains independent
+    GW->>DB: state='failed', error_text=…<br/>accounting remains independent
     GW-->>C: OpenAI-shaped error<br/>(502/500)
   end
 

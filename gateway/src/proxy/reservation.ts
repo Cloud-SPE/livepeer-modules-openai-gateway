@@ -73,23 +73,23 @@ export async function commitReservation(
   proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'committed' });
 }
 
-export interface RefundInput {
+export interface FailureInput {
   statusCode: number;
   errorText: string;
 }
 
-export async function refundReservation(
+export async function failReservation(
   deps: ServerDeps,
   handle: ReservationHandle,
-  input: RefundInput,
+  input: FailureInput,
 ): Promise<void> {
-  await usageRepo.refund(deps.db, {
+  await usageRepo.fail(deps.db, {
     workId: handle.workId,
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
     errorText: input.errorText,
   });
-  proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'refunded' });
+  proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'failed' });
 }
 
 export async function recordSelectedRoute(

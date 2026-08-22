@@ -135,7 +135,7 @@ export const UsageReservationRow = z
     terminalEvidenceType: z
       .enum(['not_admitted', 'outcome_unknown', 'evidence_expired', 'debit_failed'])
       .nullable(),
-    state: z.enum(['open', 'committed', 'refunded']),
+    state: z.enum(['open', 'committed', 'failed']),
     committedWorkUnits: z.number().nullable(),
     latencyMs: z.number().nullable(),
     statusCode: z.number().nullable(),

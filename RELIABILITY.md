@@ -39,6 +39,11 @@ Reliability properties this gateway is expected to uphold.
   complete broker-signed claim before a background settler submits it to LOC.
   Retries do not abandon transient failures; `LOC_SETTLE_ALERT_ATTEMPTS`
   controls alerting only.
+- **Request outcome is not financial outcome.** `open`, `committed`, and
+  `failed` describe what the gateway observed for the customer request. A
+  failed response may still settle valid delivered work or become a LOC
+  conservative charge. Only the separate signed-evidence and LOC-settlement
+  fields describe accounting; no state is called `refunded`.
 - **Catalog refresh is non-blocking.** The background task that
   populates the `models` table from the LOC capability catalog runs
   every `REGISTRY_REFRESH_INTERVAL_MS` (default 60s) and never blocks

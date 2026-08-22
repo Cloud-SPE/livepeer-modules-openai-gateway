@@ -29,6 +29,11 @@ Immediate broker headers aid correlation but do not override the signed claim.
 The signed settlement is authoritative for actual units, debited units,
 billed value, and outcome.
 
+The reservation's `open`/`committed`/`failed` state is only the
+customer-visible gateway outcome. `failed` never asserts a financial refund;
+evidence lookup and LOC reconciliation continue independently for an admitted
+job.
+
 For transcription, the gateway runs the canonical
 `multipart-audio-duration/v1` exact-or-reject estimator before LOC open. It
 rejects an upload that cannot produce an exact positive whole-second ceiling.

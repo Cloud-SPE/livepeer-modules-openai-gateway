@@ -73,3 +73,17 @@ test('admission terminal migration preserves distinct unknown and expired outcom
   assert.match(migration, /DROP CONSTRAINT usage_reservations_settlement_lookup_state_check/);
   assert.match(migration, /ADD CONSTRAINT usage_reservations_settlement_lookup_state_check/);
 });
+
+test('request outcome migration removes the false financial refund state', async () => {
+  const migrationUrl = new URL(
+    '../../migrations/0009_usage_outcome_not_refund.sql',
+    import.meta.url,
+  );
+  const migration = await readFile(migrationUrl, 'utf8');
+  assert.match(migration, /SET state = 'failed'/);
+  assert.match(migration, /WHERE state = 'refunded'/);
+  assert.match(migration, /CHECK \(state IN \('open', 'committed', 'failed'\)\)/);
+  assert.doesNotMatch(migration, /settle_state\s*=/);
+  assert.doesNotMatch(migration, /broker_actual_units\s*=/);
+  assert.doesNotMatch(migration, /loc_billed_value_wei\s*=/);
+});

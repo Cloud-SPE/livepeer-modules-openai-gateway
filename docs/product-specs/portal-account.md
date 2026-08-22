@@ -81,7 +81,7 @@ courtesy, not a product."
   metadata when available and falls back to free-text input when a
   model does not advertise a voice list.
 - The usage view shows at least: timestamp, capability, model,
-  state pill (committed/refunded/open), work units, status, latency.
+  state pill (committed/failed/open), work units, status, latency.
 - Route/quote details in usage are readable without distorting the
   table layout: they open in a dismissible modal rather than inline.
 - The usage API also carries the selected route/quote metadata for each

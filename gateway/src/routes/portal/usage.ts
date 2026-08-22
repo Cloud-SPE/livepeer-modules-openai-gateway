@@ -130,7 +130,7 @@ export async function registerUsageRoutes(
             | 'evidence_expired'
             | 'debit_failed'
             | null,
-          state: r.state as 'open' | 'committed' | 'refunded',
+          state: r.state as 'open' | 'committed' | 'failed',
           committedWorkUnits: r.committedWorkUnits,
           latencyMs: r.latencyMs,
           statusCode: r.statusCode,

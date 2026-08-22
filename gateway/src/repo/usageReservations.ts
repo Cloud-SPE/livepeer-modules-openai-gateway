@@ -385,18 +385,18 @@ function requiredNonnegativeInteger(row: Record<string, unknown>, field: string)
   return parsed;
 }
 
-export interface RefundInput {
+export interface FailureInput {
   workId: string;
   latencyMs: number;
   statusCode: number;
   errorText: string;
 }
 
-export async function refund(db: Db, input: RefundInput): Promise<void> {
+export async function fail(db: Db, input: FailureInput): Promise<void> {
   await db
     .update(usageReservations)
     .set({
-      state: 'refunded',
+      state: 'failed',
       latencyMs: input.latencyMs,
       statusCode: input.statusCode,
       errorText: input.errorText,
@@ -571,7 +571,7 @@ export interface UsageSummary {
   email: string;
   totalRequests: number;
   committedTotal: number;
-  refundedTotal: number;
+  failedTotal: number;
   lastUsedAt: Date | null;
 }
 
@@ -586,7 +586,7 @@ export async function summaryByApiKey(
       email: waitlist.email,
       totalRequests: sql<number>`count(*)::int`,
       committedTotal: sql<number>`count(*) FILTER (WHERE ${usageReservations.state} = 'committed')::int`,
-      refundedTotal: sql<number>`count(*) FILTER (WHERE ${usageReservations.state} = 'refunded')::int`,
+      failedTotal: sql<number>`count(*) FILTER (WHERE ${usageReservations.state} = 'failed')::int`,
       lastUsedAt: sql<Date | null>`max(${usageReservations.createdAt})`,
     })
     .from(usageReservations)
@@ -608,14 +608,14 @@ export async function summaryByWaitlist(
 ): Promise<{
   totalRequests: number;
   committedTotal: number;
-  refundedTotal: number;
+  failedTotal: number;
   lastUsedAt: Date | null;
 }> {
   const [row] = await db
     .select({
       totalRequests: sql<number>`count(*)::int`,
       committedTotal: sql<number>`count(*) FILTER (WHERE ${usageReservations.state} = 'committed')::int`,
-      refundedTotal: sql<number>`count(*) FILTER (WHERE ${usageReservations.state} = 'refunded')::int`,
+      failedTotal: sql<number>`count(*) FILTER (WHERE ${usageReservations.state} = 'failed')::int`,
       lastUsedAt: sql<Date | null>`max(${usageReservations.createdAt})`,
     })
     .from(usageReservations)
@@ -625,7 +625,7 @@ export async function summaryByWaitlist(
     return {
       totalRequests: 0,
       committedTotal: 0,
-      refundedTotal: 0,
+      failedTotal: 0,
       lastUsedAt: null,
     };
   }

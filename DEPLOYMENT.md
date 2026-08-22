@@ -454,7 +454,7 @@ Prometheus scrapes `/metrics`. Surfaces:
 Recommended starter alerts:
 
 - 5xx rate above 1% sustained 5 min on `/v1/*`
-- `proxy_reservations_total{outcome="refunded"}` rising sharply
+- `proxy_reservations_total{outcome="failed"}` rising sharply
   vs `committed`
 - `pendingSettlements` (from `/health`) climbing — the settler can't
   reach the LOC; signed settlement is delayed
