@@ -5,6 +5,9 @@ export class LivepeerBrokerError extends Error {
   readonly code: string;
   readonly backoffSeconds: number | undefined;
   readonly requestId: string | undefined;
+  readonly jobId: string | undefined;
+  readonly workUnit: string | undefined;
+  readonly workUnits: string | undefined;
   readonly responseBody: string;
 
   constructor(opts: {
@@ -13,6 +16,9 @@ export class LivepeerBrokerError extends Error {
     message: string;
     backoffSeconds?: number;
     requestId?: string;
+    jobId?: string;
+    workUnit?: string;
+    workUnits?: string;
     responseBody?: string;
   }) {
     super(opts.message);
@@ -21,6 +27,9 @@ export class LivepeerBrokerError extends Error {
     this.code = opts.code;
     this.backoffSeconds = opts.backoffSeconds;
     this.requestId = opts.requestId;
+    this.jobId = opts.jobId;
+    this.workUnit = opts.workUnit;
+    this.workUnits = opts.workUnits;
     this.responseBody = opts.responseBody ?? "";
   }
 }
@@ -41,6 +50,9 @@ export function errorFromResponse(
 
   const code = get(HEADER.ERROR) ?? "unknown";
   const requestId = get(HEADER.REQUEST_ID);
+  const jobId = get(HEADER.JOB_ID);
+  const workUnit = get(HEADER.WORK_UNIT);
+  const workUnits = get(HEADER.WORK_UNITS);
   const backoffStr = get(HEADER.BACKOFF);
   let backoffSeconds: number | undefined;
   if (backoffStr) {
@@ -67,6 +79,9 @@ export function errorFromResponse(
     message,
     backoffSeconds,
     requestId,
+    jobId,
+    workUnit,
+    workUnits,
     responseBody: bodyStr,
   });
 }

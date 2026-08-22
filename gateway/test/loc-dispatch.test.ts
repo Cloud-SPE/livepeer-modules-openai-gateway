@@ -223,6 +223,7 @@ test('accounting-only replay schedules the original job and fails without resubm
 test('broker 5xx does not create or compensate a fresh LOC job', async () => {
   await withMockBroker(500, async (brokerUrl) => {
     const { loc, calls } = fakeLoc((n) => job(brokerUrl, n));
+    const updates: string[] = [];
     await assert.rejects(
       dispatchReqresp({
         loc,
@@ -232,17 +233,58 @@ test('broker 5xx does not create or compensate a fresh LOC job', async () => {
         idempotencyKey: 'r',
         maxJobAttempts: 3,
         body: null,
+        onJobUpdate: async (ref) => { updates.push(ref.brokerJobId); },
       }),
       (err: unknown) => {
         assert.ok(err instanceof LivepeerBrokerError);
         // Final job's ref is attached for the handler's durable settle.
         assert.equal(jobRefFromError(err)?.jobId, 'job-1');
+        assert.equal(jobRefFromError(err)?.brokerJobId, 'broker-job-1');
         return true;
       },
     );
     assert.equal(calls.opens, 1);
     assert.deepEqual(calls.settles, []);
+    assert.deepEqual(updates, ['', 'broker-job-1']);
   });
+});
+
+test('terminal broker error rejects nonzero work claims', async () => {
+  const server: Server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(500, {
+        'Content-Type': 'application/json',
+        'Livepeer-Job-Id': 'broker-job-bad',
+        'Livepeer-Work-Unit': 'tokens',
+        'Livepeer-Work-Units': '9',
+      });
+      res.end('{"message":"boom"}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const brokerUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const { loc } = fakeLoc(() => job(brokerUrl, 1));
+    await assert.rejects(
+      dispatchReqresp({
+        loc,
+        capability: 'c',
+        offering: 'o',
+        estimatedUnits: 1,
+        idempotencyKey: 'r',
+        body: null,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof LivepeerBrokerError);
+        assert.equal(err.code, 'protocol_response_invalid');
+        assert.equal(jobRefFromError(err)?.brokerJobId, '');
+        return true;
+      },
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 test('broker 4xx: fails immediately without retry', async () => {

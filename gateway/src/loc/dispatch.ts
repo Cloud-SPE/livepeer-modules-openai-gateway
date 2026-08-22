@@ -190,8 +190,18 @@ async function attemptJob<T extends {
       jobRef: ref,
     };
   } catch (err) {
-    attachJobContext(err, job, opts, admittedJobId);
-    throw err;
+    let dispatchError = err;
+    if (err instanceof LivepeerBrokerError && err.jobId) {
+      try {
+        validateBrokerErrorMetadata(err, job);
+        admittedJobId = err.jobId;
+        await opts.onJobUpdate?.(jobRef(job, opts, admittedJobId), candidate);
+      } catch (metadataError) {
+        dispatchError = metadataError;
+      }
+    }
+    attachJobContext(dispatchError, job, opts, admittedJobId);
+    throw dispatchError;
   }
 }
 
@@ -309,6 +319,29 @@ function validateBrokerMetadata(
       status: 502,
       code: 'work_unit_mismatch',
       message: `broker work unit ${result.workUnit ?? '<missing>'} does not match LOC ${job.workUnit}`,
+    });
+  }
+}
+
+/** paid-job/v1 terminal errors carry the same audit identity as successes and
+ * always claim zero delivered units. A pre-admission refusal has no job id and
+ * is recovered (if recorded) by the stable request-id lookup instead. */
+function validateBrokerErrorMetadata(
+  error: LivepeerBrokerError,
+  job: OpenJobResponse,
+): void {
+  if (!error.workUnit || error.workUnit !== job.workUnit) {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'work_unit_mismatch',
+      message: `broker error work unit ${error.workUnit ?? '<missing>'} does not match LOC ${job.workUnit}`,
+    });
+  }
+  if (error.workUnits !== '0') {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'protocol_response_invalid',
+      message: `broker terminal error must report zero work units, received ${error.workUnits ?? '<missing>'}`,
     });
   }
 }
