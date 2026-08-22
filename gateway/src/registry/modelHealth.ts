@@ -27,11 +27,9 @@ export async function loadActiveModelHealth(
     modelsRepo.listActive(db),
     registryCatalog.inspect(),
   ]);
-  const liveIndex = indexCandidates(liveCandidates);
 
   return rows.map((row) => {
-    const key = modelKey(row.capability, row.modelId);
-    const matches = liveIndex.get(key) ?? [];
+    const matches = candidatesForModel(liveCandidates, row.capability, row.modelId);
     return {
       id: row.modelId,
       capability: row.capability,
@@ -51,21 +49,15 @@ export async function loadActiveModelHealth(
   });
 }
 
-function indexCandidates(candidates: RouteCandidate[]): Map<string, RouteCandidate[]> {
-  const out = new Map<string, RouteCandidate[]>();
-  for (const candidate of candidates) {
-    const model = (candidate.model ?? candidate.offering)?.trim();
-    if (!model) continue;
-    const key = modelKey(candidate.capability, model);
-    const bucket = out.get(key) ?? [];
-    bucket.push(candidate);
-    out.set(key, bucket);
-  }
-  return out;
-}
-
-function modelKey(capability: string, modelId: string): string {
-  return `${capability}\u0000${modelId}`;
+export function candidatesForModel(
+  candidates: RouteCandidate[],
+  capability: string,
+  offering: string,
+): RouteCandidate[] {
+  return candidates.filter(
+    (candidate) =>
+      candidate.capability === capability && candidate.offering.trim() === offering,
+  );
 }
 
 function uniq(values: string[]): string[] {

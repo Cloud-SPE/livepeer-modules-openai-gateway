@@ -49,6 +49,21 @@ describe('candidatesToModelRows', () => {
     assert.equal(rows[0]!.brokerUrl, 'http://broker2');
   });
 
+  it('preserves the same offering id under different capabilities', () => {
+    const rows = candidatesToModelRows([
+      candidate({ capability: 'openai:chat-completions', offering: 'default' }),
+      candidate({ capability: 'openai:audio-transcriptions', offering: 'default' }),
+    ]);
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      rows.map((row) => `${row.capability}/${row.modelId}`).sort(),
+      [
+        'openai:audio-transcriptions/default',
+        'openai:chat-completions/default',
+      ],
+    );
+  });
+
   it('uses offering id even when runner model differs', () => {
     const rows = candidatesToModelRows([
       candidate({ model: null, offering: 'offering-id' }),
