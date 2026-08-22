@@ -113,7 +113,13 @@ pass "usage_reservations recorded the request ($recs committed total)"
 
 # ── 8. metrics ──────────────────────────────────────────────────
 section "/metrics"
-status=$(curl -s -o /tmp/smoke-metrics.txt -w "%{http_code}" "$GATEWAY/metrics")
+metrics_token=$(docker compose exec -T gateway printenv METRICS_TOKEN 2>/dev/null || true)
+metrics_auth=()
+if [[ -n "$metrics_token" ]]; then
+  metrics_auth=(-H "Authorization: Bearer $metrics_token")
+fi
+status=$(curl -s -o /tmp/smoke-metrics.txt -w "%{http_code}" \
+  "${metrics_auth[@]}" "$GATEWAY/metrics")
 require_status 200 "$status" "GET /metrics"
 grep -q "openai_service_proxy_reservations_total" /tmp/smoke-metrics.txt \
   || fail "/metrics missing proxy reservation counter"
