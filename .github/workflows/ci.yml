@@ -94,8 +94,33 @@ jobs:
       - name: Extract tag
         id: meta
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const expected = process.env.RELEASE_VERSION;
+          const manifests = [
+            'package.json',
+            'gateway/package.json',
+            'web/site/package.json',
+            'web/portal/package.json',
+            'web/admin/package.json',
+          ];
+          for (const manifest of manifests) {
+            const actual = JSON.parse(readFileSync(manifest, 'utf8')).version;
+            if (actual !== expected) {
+              throw new Error(`${manifest} version ${actual} does not match release tag v${expected}`);
+            }
+          }
+          NODE
 
       - name: Build + push (multi-arch)
         uses: docker/build-push-action@v5
@@ -104,8 +129,11 @@ jobs:
           file: gateway/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            VCS_REF=${{ github.sha }}
           tags: |
-            tztcloud/openai-service-gateway:${{ steps.meta.outputs.version }}
+            tztcloud/openai-service-gateway:${{ steps.meta.outputs.tag }}
             tztcloud/openai-service-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

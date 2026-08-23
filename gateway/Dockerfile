@@ -25,6 +25,16 @@ RUN pnpm --filter @livepeer-modules-openai/gateway build
 # ── runtime ───────────────────────────────────────────────────────────
 FROM node:24-bookworm-slim AS runtime
 
+ARG APP_VERSION=2.0.0
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="Livepeer Modules OpenAI Gateway" \
+      org.opencontainers.image.description="OpenAI-compatible gateway backed by Livepeer paid-job/v1" \
+      org.opencontainers.image.source="https://github.com/Cloud-SPE/livepeer-modules-openai-gateway" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
 # Reasonable defaults; everything else comes from env at deploy time.
 ENV NODE_ENV=production \
     PORT=4001
@@ -42,6 +52,9 @@ COPY --from=builder /app/web ./web
 WORKDIR /app/gateway
 
 EXPOSE 4001
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||4001)+'/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 # Non-root runtime user.
 USER 65532:65532

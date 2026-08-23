@@ -36,7 +36,10 @@ services:
     build:
       context: .
       dockerfile: gateway/Dockerfile
-    image: openai-service-gateway:${GATEWAY_TAG:-v1.4.1}
+      args:
+        APP_VERSION: "2.0.0"
+        VCS_REF: ${GATEWAY_VCS_REF:-local}
+    image: openai-service-gateway:${GATEWAY_TAG:-v2.0.0}
     container_name: openai-service-gateway
     depends_on:
       db:

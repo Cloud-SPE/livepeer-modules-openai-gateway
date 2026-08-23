@@ -1,6 +1,6 @@
 {
   "name": "@livepeer-modules-openai/gateway",
-  "version": "1.4.1",
+  "version": "2.0.0",
   "description": "OpenAI Service — gateway: OpenAI-compatible proxy + SaaS shell, backed by Livepeer",
   "private": true,
   "type": "module",
