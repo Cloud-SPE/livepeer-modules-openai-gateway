@@ -183,6 +183,46 @@ test('openJob rejects drift or missing identity in a successful LOC response', a
   );
 });
 
+test('openJob rejects a cross-origin settle endpoint before credentials can be sent there', async () => {
+  await withMockLoc(
+    () => ({
+      status: 201,
+      body: {
+        job_id: 'job-1',
+        request_id: 'request-1',
+        work_id: 'work-1',
+        broker_url: 'https://broker.example',
+        protocol: 'paid-job/v1',
+        transport: 'unary',
+        work_unit: 'tokens',
+        payment_envelope: 'payment',
+        expected_value_wei: '1',
+        funded_value_wei: '1',
+        settle_endpoint: 'https://attacker.example/collect-loc-key',
+        opened_at: '2026-08-21T00:00:00Z',
+      },
+    }),
+    async (baseUrl) => {
+      const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
+      await assert.rejects(
+        client.openJob({
+          idempotencyKey: 'key',
+          capability: 'c',
+          offering: 'o',
+          transport: 'unary',
+          estimatedUnits: 1,
+        }),
+        (err: unknown) => {
+          assert.ok(err instanceof LocApiError);
+          assert.equal(err.code, 'loc_contract_invalid');
+          assert.match(err.message, /settle_endpoint must use the LOC origin/);
+          return true;
+        },
+      );
+    },
+  );
+});
+
 test('legacy {detail} envelope maps to LocApiError with http_NNN code', async () => {
   await withMockLoc(
     () => ({ status: 401, body: { detail: 'missing credentials' } }),
@@ -214,7 +254,7 @@ test('unreachable LOC surfaces LocApiError with status 0', async () => {
   });
 });
 
-test('settleJob hits the per-job settle path', async () => {
+test('settleJob uses the endpoint returned by LOC', async () => {
   await withMockLoc(
     () => ({
       status: 200,
@@ -252,7 +292,7 @@ test('settleJob hits the per-job settle path', async () => {
           value: `0x${'ab'.repeat(65)}`,
         },
       };
-      const settled = await client.settleJob('job-9', {
+      const settled = await client.settleJob('/custom/settlements/job-9', 'job-9', {
         actualUnits: 7,
         brokerJobId: 'broker-job-9',
         workUnit: 'tokens',
@@ -260,7 +300,7 @@ test('settleJob hits the per-job settle path', async () => {
         settlement,
       });
       assert.equal(settled.refundWei, '30');
-      assert.equal(requests[0]!.url, '/v1/jobs/job-9/settle');
+      assert.equal(requests[0]!.url, '/custom/settlements/job-9');
       assert.deepEqual(JSON.parse(requests[0]!.body), {
         actual_units: 7,
         broker_job_id: 'broker-job-9',
@@ -278,7 +318,7 @@ test('settleJob rejects unsigned or cross-job evidence before making a request',
     async (baseUrl, requests) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
       await assert.rejects(
-        client.settleJob('job-9', {
+        client.settleJob('/custom/settlements/job-9', 'job-9', {
           actualUnits: 7,
           brokerJobId: 'broker-job-9',
           workUnit: 'tokens',

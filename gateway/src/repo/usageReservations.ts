@@ -410,6 +410,7 @@ export async function fail(db: Db, input: FailureInput): Promise<void> {
 export interface PendingSettlement {
   id: string;
   locJobId: string;
+  settleEndpoint: string;
   brokerJobId: string;
   workUnit: string;
   actualUnits: number;
@@ -425,13 +426,14 @@ export async function claimPendingSettlements(
   limit: number,
 ): Promise<PendingSettlement[]> {
   const rows = await db.execute(sql`
-    SELECT id, loc_job_id, broker_job_id, selected_work_unit,
+    SELECT id, loc_job_id, settle_endpoint, broker_job_id, selected_work_unit,
            broker_actual_units, broker_settlement_outcome,
            settlement_envelope, settle_attempts
     FROM usage_reservations
     WHERE settle_state = 'pending'
       AND settlement_lookup_state = 'ready'
       AND loc_job_id IS NOT NULL
+      AND settle_endpoint IS NOT NULL
       AND broker_job_id IS NOT NULL
       AND selected_work_unit IS NOT NULL
       AND broker_actual_units IS NOT NULL
@@ -446,6 +448,7 @@ export async function claimPendingSettlements(
     return {
       id: String(r['id']),
       locJobId: String(r['loc_job_id']),
+      settleEndpoint: requiredText(r, 'settle_endpoint'),
       brokerJobId: requiredText(r, 'broker_job_id'),
       workUnit: requiredText(r, 'selected_work_unit'),
       actualUnits: safeIntegerFromDatabase(r['broker_actual_units'], 'broker_actual_units'),

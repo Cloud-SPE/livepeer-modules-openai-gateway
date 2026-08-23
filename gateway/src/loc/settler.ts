@@ -100,7 +100,7 @@ export async function runSettleOnce(
 
   for (const row of pending) {
     try {
-      const result = await loc.settleJob(row.locJobId, {
+      const result = await loc.settleJob(row.settleEndpoint, row.locJobId, {
         actualUnits: row.actualUnits,
         brokerJobId: row.brokerJobId,
         workUnit: row.workUnit,

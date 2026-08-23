@@ -139,7 +139,7 @@ export interface LocHealth {
 
 export interface LocClient {
   openJob(req: OpenJobRequest): Promise<OpenJobResponse>;
-  settleJob(jobId: string, req: SettleJobRequest): Promise<SettleJobResponse>;
+  settleJob(settleEndpoint: string, jobId: string, req: SettleJobRequest): Promise<SettleJobResponse>;
   listCapabilities(): Promise<LocCapability[]>;
   listOrchestrators(capability?: string): Promise<LocOrchestrator[]>;
   getBalance(): Promise<LocBalance>;
@@ -211,7 +211,11 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         throw invalidContract(`transport drift: requested ${req.transport}, received ${transport}`);
       }
       const brokerUrl = requireUrl(raw['broker_url'], 'broker_url');
-      const settleEndpoint = requireUrlOrPath(raw['settle_endpoint'], 'settle_endpoint');
+      const settleEndpoint = requireLocEndpoint(
+        raw['settle_endpoint'],
+        'settle_endpoint',
+        cfg.baseUrl,
+      );
       return {
         jobId: requireText(raw['job_id'], 'job_id'),
         requestId: requireText(raw['request_id'], 'request_id'),
@@ -228,7 +232,16 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
       };
     },
 
-    async settleJob(jobId: string, req: SettleJobRequest): Promise<SettleJobResponse> {
+    async settleJob(
+      settleEndpoint: string,
+      jobId: string,
+      req: SettleJobRequest,
+    ): Promise<SettleJobResponse> {
+      const normalizedSettleEndpoint = requireLocEndpoint(
+        settleEndpoint,
+        'settle_endpoint',
+        cfg.baseUrl,
+      );
       const normalizedJobId = requireText(jobId, 'job id');
       const actualUnits = requireSafeUnsignedInteger(req.actualUnits, 'actual_units');
       const brokerJobId = requireText(req.brokerJobId, 'broker_job_id');
@@ -241,7 +254,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         ...(req.outcome !== undefined ? { outcome: requireText(req.outcome, 'outcome') } : {}),
       });
       const raw = asRecord(
-        await call('POST', `/v1/jobs/${encodeURIComponent(normalizedJobId)}/settle`, {
+        await call('POST', normalizedSettleEndpoint, {
           actual_units: actualUnits,
           broker_job_id: brokerJobId,
           work_unit: workUnit,
@@ -382,10 +395,14 @@ function requireUrl(value: unknown, field: string): string {
   return result;
 }
 
-function requireUrlOrPath(value: unknown, field: string): string {
+function requireLocEndpoint(value: unknown, field: string, baseUrl: string): string {
   const result = requireText(value, field);
   if (result.startsWith('/')) return result;
-  return requireUrl(result, field);
+  const endpoint = requireUrl(result, field);
+  if (new URL(endpoint).origin !== new URL(baseUrl).origin) {
+    throw invalidContract(`${field} must use the LOC origin`);
+  }
+  return endpoint;
 }
 
 function requireUnsignedIntegerText(value: unknown, field: string): string {

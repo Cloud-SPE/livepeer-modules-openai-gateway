@@ -50,7 +50,7 @@ async function withMockBroker(
 interface FakeLocCalls {
   opens: number;
   openRequests: OpenJobRequest[];
-  settles: Array<{ jobId: string; req: SettleJobRequest }>;
+  settles: Array<{ settleEndpoint: string; jobId: string; req: SettleJobRequest }>;
 }
 
 function fakeLoc(
@@ -65,8 +65,8 @@ function fakeLoc(
       if (out instanceof LocApiError) throw out;
       return out;
     },
-    async settleJob(jobId, req) {
-      calls.settles.push({ jobId, req });
+    async settleJob(settleEndpoint, jobId, req) {
+      calls.settles.push({ settleEndpoint, jobId, req });
       return {
         jobId,
         workId: 'w',

@@ -27,16 +27,16 @@ function fakeStore(rows: PendingSettlement[]): { store: SettleStore; log: StoreL
 }
 
 function fakeLoc(
-  settleImpl: (jobId: string, req: SettleJobRequest) => void,
-): { loc: LocClient; settles: Array<{ jobId: string; req: SettleJobRequest }> } {
-  const settles: Array<{ jobId: string; req: SettleJobRequest }> = [];
+  settleImpl: (settleEndpoint: string, jobId: string, req: SettleJobRequest) => void,
+): { loc: LocClient; settles: Array<{ settleEndpoint: string; jobId: string; req: SettleJobRequest }> } {
+  const settles: Array<{ settleEndpoint: string; jobId: string; req: SettleJobRequest }> = [];
   const loc: LocClient = {
     async openJob() {
       throw new Error('not used');
     },
-    async settleJob(jobId, req) {
-      settles.push({ jobId, req });
-      settleImpl(jobId, req);
+    async settleJob(settleEndpoint, jobId, req) {
+      settles.push({ settleEndpoint, jobId, req });
+      settleImpl(settleEndpoint, jobId, req);
       return {
         jobId,
         workId: 'w',
@@ -75,6 +75,7 @@ function row(overrides: Partial<PendingSettlement> = {}): PendingSettlement {
   return {
     id: 'res-1',
     locJobId: 'job-1',
+    settleEndpoint: '/custom/settlements/job-1',
     brokerJobId: 'broker-job-1',
     workUnit: 'tokens',
     actualUnits: 5,
@@ -104,6 +105,7 @@ test('successful settle marks the row settled with actual units', async () => {
   const stats = await runSettleOnce(store, loc, 20, 50);
   assert.deepEqual(stats, { settled: 1, failed: 0, retried: 0 });
   assert.deepEqual(log.settled, ['res-1']);
+  assert.equal(settles[0]!.settleEndpoint, '/custom/settlements/job-1');
   assert.equal(settles[0]!.jobId, 'job-1');
   assert.equal(settles[0]!.req.actualUnits, 5);
   assert.equal(settles[0]!.req.outcome, 'EXACT');
@@ -176,7 +178,7 @@ test('mixed batch: each row classified independently', async () => {
     row({ id: 'a', locJobId: 'job-a' }),
     row({ id: 'b', locJobId: 'job-b' }),
   ]);
-  const { loc } = fakeLoc((jobId) => {
+  const { loc } = fakeLoc((_settleEndpoint, jobId) => {
     if (jobId === 'job-b') {
       throw new LocApiError({ status: 503, code: 'daemon_unavailable', message: 'down' });
     }
