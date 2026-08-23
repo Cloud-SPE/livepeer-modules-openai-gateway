@@ -94,7 +94,9 @@ for how the checks compose into the boot story.
 | Settlement lookup or LOC settle is transiently unavailable | No response-path impact; the durable row remains retryable. | `pendingSettlements` rises (still `200` unless LOC ping also fails) |
 | LOC advertises no offerings for the requested capability | Job open fails / no route — gateway returns the LOC error (typically `model_not_found` or `404`). | n/a |
 | Selected broker returns 5xx / network error | Propagate `502`; recover the signed outcome independently by job or request ID. | n/a |
-| Selected broker returns 4xx | Propagate verbatim — that's the user's problem, not a routing issue. | n/a |
+| Selected broker returns a protocol-compliant 4xx | Propagate the broker status/body. Persist its job identity and recover terminal evidence independently. | n/a |
+| Broker terminal response omits required job/unit metadata or reports nonzero units for a non-streaming error | Fail closed as `502 protocol_response_invalid`; retain the reservation for request-ID recovery rather than inventing a zero-unit settlement. | n/a |
+| Signed settlement exceeds the funded `max_total_units` | LOC rejects it as `usage_ceiling_exceeded`; retain the signed claim and surface a permanent reconciliation failure. The worker or estimator violated the funded bound. | n/a |
 | Postgres unreachable | `/v1/*` returns 500 (api-key lookup throws); SaaS routes return 500. New requests fail until DB recovers. | `db: error` → `status: down` → **HTTP 503** |
 | Resend unreachable | Signup still succeeds (waitlist row persists). The verification-email send is logged loudly and *not* retried. Admin can resend via `POST /admin/waitlist/:id/resend-verification`. | n/a |
 | Rate-limit exhaustion for an API key | `429 rate_limit_exceeded` with `Retry-After`. Reservation is NOT opened. | n/a |
@@ -119,9 +121,11 @@ for how the checks compose into the boot story.
 - **No retries on stream-mid-flight failures.** Once SSE bytes have
   reached the client, a broker disconnection terminates the stream.
   Users see a truncated response.
-- **No idempotency keys in v1.** A duplicate POST creates duplicate
-  upstream work. Most OpenAI SDKs don't retry POSTs automatically,
-  so this rarely bites in practice.
+- **No customer-supplied idempotency contract on the OpenAI surface.** A second
+  client POST is a new operation. Internally, every LOC open has a generated
+  idempotency key that is retained and reused for identical recovery attempts;
+  this prevents gateway retry ambiguity but does not deduplicate two distinct
+  client calls.
 - **In-process rate-limit only.** A multi-replica deploy doesn't
   share buckets; a user gets `N * per-replica-burst` effective
   burst. Distributed rate-limiting is a future plan.

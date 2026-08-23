@@ -142,9 +142,11 @@ for the unresolved financial terminal states.
   portable authority; response headers/trailers remain observations.
 - **2026-08-21 — separate usage signals.** Seller claim, actual debit, LOC
   settlement, and buyer observation remain separately named and stored.
-- **2026-08-21 — prefer broker-side transcription parsing.** This gateway owns
-  no runners, so a runner header is safe only if it is a universal capability
-  contract.
+- **2026-08-21 — reproduce only the advertised transcription ceiling.** The
+  broker owns seller-side measurement. The gateway owns a small local
+  `multipart-audio-duration/v1` implementation solely to bound LOC funding,
+  and verifies it against the protocol fixture vectors. LOC passes estimator
+  metadata through but parses no media; no Modules package is a dependency.
 - **2026-08-21 — the 24-hour retention assumption is superseded.** `paid-job`
   1.0.12 defines retention using maximum envelope spendable life, while also
   establishing that governance can revive an issued ticket. A finite deletion
@@ -176,6 +178,21 @@ for the unresolved financial terminal states.
   broker record-deletion acknowledgement must authenticate LOC independently
   of `request_id`; otherwise the customer could erase evidence before LOC
   reconciles it.
-- **2026-08-21 — transcription duration extractor accepted.** Use Modules'
-  `multipart-audio-duration`; keep inexact headerless MP3 estimation disabled
-  unless the product deliberately opts into estimated billing.
+- **2026-08-21 — transcription duration contract accepted.** Implement the
+  advertised `multipart-audio-duration/v1`, `ceil-to-whole-seconds`,
+  `exact-or-reject` ceiling locally; refuse headerless MP3 and unknown
+  estimator IDs. The signed broker settlement remains usage authority.
+- **2026-08-23 — live stream path proven.** A localhost stream returned HTTP
+  200 SSE and `[DONE]`; request-ID recovery persisted a signed claim for 36
+  actual/debited tokens and 4 wei, and LOC reached terminal settlement. LOC
+  recovered and closed the job before the gateway's retry, so the gateway
+  correctly treated `job_already_settled` as success while retaining evidence.
+- **2026-08-23 — multipart remains externally blocked.** A fresh exact 3-second
+  WAV open again funded 3000 wei but credited only 2 wei of payee expected
+  value. The broker refused `insufficient_balance` without the mandatory
+  zero-unit HTTP claim and request-ID lookup ended as
+  `ADMITTED_OUTCOME_UNKNOWN`. Track under `lmoa-3bv.27` and `.28`.
+- **2026-08-23 — worker output limits are part of conformance.** The Modules
+  fixture emitted 36 total tokens for a request whose prompt plus
+  `max_tokens: 8` ceiling was 17. LOC correctly rejected the signed claim as
+  `usage_ceiling_exceeded`; `lmoa-3bv.29` tracks fixture compliance.

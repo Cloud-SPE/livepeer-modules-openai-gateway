@@ -167,9 +167,11 @@ make loc-smoke   # executes a paid job and submits its signed settlement
 ```
 
 The pilot supports `openai:chat-completions/default` over unary and stream.
-Do not advertise transcription as ready: the route returns
-`transcription_estimator_unavailable` before LOC open until LOC propagates the
-canonical estimator metadata.
+LOC now passes the `multipart-audio-duration/v1` estimator metadata through,
+and this gateway reproduces that ceiling locally without a Modules runtime or
+build dependency. Do not advertise transcription as ready until the external
+payment expected-value and broker terminal-evidence release gates recorded in
+the active paid-job migration plan pass against the deployed stack.
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.
@@ -223,15 +225,23 @@ Validate end-to-end against a real orchestrator:
              state,
              estimated_work_units,
              committed_work_units,
+             loc_request_id,
+             broker_job_id,
+             settlement_lookup_state,
+             broker_actual_units,
+             broker_debited_units,
+             broker_billed_value_wei,
              settle_state,
-             settle_actual_units,
              latency_ms
       FROM usage_reservations ORDER BY created_at DESC LIMIT 5;"
    ```
 
    The latest row should be `state=committed`, have all paid-job identities,
    capture `settlement_envelope`, and move `settle_state` from `pending` to
-   `settled`. `committed_work_units` is not accounting authority.
+   `settled`. A lost LOC response can instead produce a terminal
+   `job_already_settled` acknowledgement; the gateway still marks settlement
+   successful and retains the original broker claim, while LOC result-detail
+   columns may remain null. `committed_work_units` is not accounting authority.
 
 5. **Confirm the models cache populated from the LOC catalog**:
 
@@ -370,29 +380,29 @@ For zero-downtime schema changes:
 3. Roll out follow-up migrations / cleanups after the new gateway is
    serving 100% of traffic.
 
-#### Upgrade note — LOC settlement (`0004_loc_settlement.sql`)
+#### Upgrade note — paid-job/v1 (`0004` through `0009`)
 
-The move to the LOC clearinghouse adds one migration,
-`0004_loc_settlement.sql`, which is the operationally relevant one for
-upgrades from the daemon-era gateway. It adds nullable settle columns
-only, so the rollout is forward-compatible:
-
-- `usage_reservations` gains `loc_job_id`, `settle_state`
-  (`NULL | pending | settled | failed`), `settle_actual_units`, and
-  `settle_outcome`, plus a partial index on `settle_state='pending'`
-  that the background settler drains.
+The breaking paid-job migration spans `0004_loc_settlement.sql` through
+`0009_usage_outcome_not_refund.sql`. Together they add the durable LOC and
+broker identities, protocol/transport catalog axes, signed settlement and
+terminal-evidence storage, request-ID recovery states, capability-scoped model
+identity, and the customer-outcome state `failed`. Migration `0005` deliberately
+clears the rebuildable model cache and removes the v0 interaction-mode column;
+there is no dual-protocol rollout.
 
 Operationally:
 
 1. Deploy the new gateway image.
-2. Let the boot-time migration runner apply `0004_loc_settlement.sql`.
-3. Confirm new `/v1/*` traffic populates `loc_job_id` and that
-   `settle_state` moves `pending → settled` as the settler runs.
+2. Let the boot-time migration runner apply every pending migration through
+   `0009_usage_outcome_not_refund.sql`.
+3. Confirm the LOC catalog repopulates `models` with `protocol=paid-job/v1`
+   and declared transports.
+4. Confirm new `/v1/*` traffic populates `loc_request_id`, `broker_job_id`, and
+   signed evidence, then reaches terminal LOC settlement.
 
-The earlier `0002`/`0003` migrations (route/quote diagnostic columns
-from the daemon era) remain applied; they are simply no longer written
-to. There are no daemon images to align — the gateway only needs a
-reachable LOC and a valid `LOC_API_KEY`.
+There are no daemon or Modules images to align in this repository. The gateway
+image needs only Postgres plus a reachable LOC and valid `LOC_API_KEY`; it uses
+the broker URL returned for each LOC job.
 
 ---
 
@@ -511,6 +521,8 @@ undoes it (don't edit history).
 | Every `/v1/*` returns 503 | LOC unreachable or job-open failing | gateway logs (logs each opened job + retries) |
 | `/v1/*` errors with insufficient funds | LOC credit balance exhausted | `GET /admin/registry/loc` (balance); top up in the LOC portal |
 | `/health` `pendingSettlements` climbing | Settler can't reach the LOC; signed settlement delayed (not lost) | gateway logs; LOC reachability |
+| Transcription returns `protocol_response_invalid` after broker `insufficient_balance` | Deployed payer credited less expected value than the funded ceiling, or broker omitted the required zero-unit terminal evidence | payer/payee/broker logs; active paid-job migration release gates |
+| LOC rejects settlement with `usage_ceiling_exceeded` | Broker measured more work than the gateway-funded maximum; for chat, verify the worker honored `max_tokens` / `max_completion_tokens` | reservation's estimated and broker actual units; worker logs |
 | Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — search for `verification email send failed` |
 | Operator can't log into admin | ADMIN_TOKEN env var missing or mismatched | `docker compose exec gateway env | grep ADMIN_TOKEN` |
 | Sudden 503s after redeploy | Migration hung the gateway boot | gateway logs — last `[migrations]` line |

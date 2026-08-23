@@ -187,9 +187,11 @@ erDiagram
 **One Postgres database. One migration track.** `gateway/migrations/`
 holds numbered `.sql` files applied in order at boot by a
 home-grown runner (`gateway/src/db.ts`). The current shape is
-`0001_initial.sql` through `0004_loc_settlement.sql` (the last adds the
-`loc_job_id` / `settle_state` / `settle_actual_units` / `settle_outcome`
-columns that drive the durable settler).
+`0001_initial.sql` through `0009_usage_outcome_not_refund.sql`. Migrations
+`0004`–`0009` are the breaking paid-job/v1 transition: LOC and broker
+identities, protocol/transport catalog axes, exact signed evidence, request-ID
+recovery states, capability-scoped model IDs, and the customer outcome
+`failed`. The rebuildable v0 model cache is cleared rather than dual-read.
 
 ### Why the state machine on `usage_reservations`
 
