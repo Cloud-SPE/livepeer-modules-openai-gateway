@@ -503,6 +503,7 @@ docker compose exec -T db pg_dump \
 # 5. Check out the exact gateway release and build/pull the pinned image.
 git fetch origin --tags
 git checkout v2.0.0
+export GATEWAY_VCS_REF="$(git rev-parse HEAD)"
 docker compose build gateway
 
 # 6. Start it in the managed foreground shell. Do not install a boot service.
