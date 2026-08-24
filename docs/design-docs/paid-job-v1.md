@@ -152,7 +152,7 @@ Endpoint funding uses the product unit declared by the offering:
 | Images | `images` | Positive integer request `n` (default 1); estimate equals ceiling. |
 | TTS | `characters` | Unicode code points in `input`, never UTF-16 code units or bytes; estimate equals ceiling. |
 | Rerank | `requests` | One per request; estimate equals ceiling. |
-| Transcription | `seconds` | Broker extraction is settled, but the pre-dispatch gateway ceiling remains open: duration is not available without parsing the uploaded container, and an arbitrary byte-rate estimate is not a safe bound for every supported codec. |
+| Transcription | `seconds` | The gateway reproduces the catalog-advertised `multipart-audio-duration/v1` ceiling locally, rounds exact duration up to whole seconds, and rejects containers that cannot be measured exactly. |
 
 When the cached catalog contains the offering, the gateway rejects a work-unit
 mismatch before opening LOC. LOC and the signed settlement repeat that check at
@@ -209,7 +209,7 @@ into `settled` or silently converted to zero usage.
 
 These block release, but not the independent catalog/client/schema retrofit:
 
-1. **Never-admitted outcome implementation.** The policy is final: the
+1. **Never-admitted outcome conformance.** The policy is final: the
    deployed chain contract has no unconditional envelope expiry because
    governance can retroactively extend or revive tickets. LOC implements no
    abandon, automatic refund, or re-encumbrance. Valid signed settlement is
@@ -218,27 +218,36 @@ These block release, but not the independent catalog/client/schema retrofit:
    `conservative_full_charge`; signed `NOT_ADMITTED` is attributable audit
    evidence only. The conservative outcome retains issuance/deadline fields,
    observed chain telemetry, reason, and evidence without inventing usage or a
-   network debit. No gateway implementation change is requested. LOC must land
-   and test these states before release. Coordination: `lmoa-3bv.3`.
-2. **Settlement recovery by request id.** Modules `3999acc` now exposes
+   network debit. LOC has implemented the policy; the remaining gate is a live
+   deadline/restart exercise proving these states. No gateway implementation
+   change is requested. Coordination: `lmoa-3bv.3`.
+2. **Settlement recovery by request id.** Modules exposes
    `GET /v1/exchange/{request_id}` with `SETTLED`, `ACCOUNTING_PENDING`,
-   `IN_FLIGHT`, `NOT_ADMITTED`, and `NO_RECORD` outcomes. LOC must consume it
-   idempotently and joint conformance must prove restart recovery and
-   cross-request isolation when the caller withholds `Livepeer-Job-Id`.
+   `IN_FLIGHT`, `NOT_ADMITTED`, and `NO_RECORD` outcomes. LOC consumes it
+   idempotently and live conformance proves ordinary withheld-settlement
+   recovery and cross-request isolation. Restart recovery and the remaining
+   accounting outcomes still require a completed joint run.
    Coordination: `lmoa-3bv.23`.
-3. **Settlement retention.** The prior 24-hour rule no longer matches
-   `paid-job` 1.0.12. Its replacement depends on maximum envelope spendable
-   life, but governance can make that unbounded. Define when restart-persistent
-   records may be deleted, preferably with an authenticated LOC
-   acknowledgement or another finite rule. Any acknowledgement must
-   authenticate LOC independently of the customer-known request id, which
-   cannot authorize evidence deletion. The same spec revision must remove
-   stale §5.3.1 language that still describes `NOT_ADMITTED` as refund evidence.
+3. **Settlement retention conformance.** `paid-job` 1.0.14-draft defines a
+   finite operational retention rule derived from LOC's conservative-charge
+   deadline, recovery window, and scheduler margin. The pilot configures a
+   persistent broker store with 96-hour retention. A joint restart/eviction
+   run must still prove that terminal evidence survives restart and that
+   admission tombstones prevent eviction from becoming false non-admission.
    Coordination: `lmoa-3bv.24`.
 4. **Debit retry window.** The retry lifecycle is resolved, but its implemented
    timing is not the advertised “10 attempts over 30 minutes.” A 30-second
    sweep with a 10-attempt cap reaches terminal failure in roughly five
    minutes. Coordination: `lmoa-3bv.22`.
+5. **Funded expected value.** A requested 3,000-wei transcription ceiling still
+   produces only 2 wei of payee credit because the payer uses the requested
+   value as ticket face value under a low win probability. The payment envelope
+   must credit the funded ceiling, subject only to explicitly defined rounding.
+   Coordination: `lmoa-3bv.28`.
+6. **Terminal funding refusals.** The broker's post-admission
+   `insufficient_balance` response omits `Livepeer-Work-Units: 0` and durable
+   signed terminal evidence, leaving request-id recovery outcome-unknown.
+   Coordination: `lmoa-3bv.27`.
 
 The release gate pins immutable upstream revisions only after these contracts
 land. Those pins gate joint behavior; they do not import broker, daemon, LOC,
@@ -266,15 +275,17 @@ or Modules package implementation code into this gateway.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed committed head `cedef80`.
-  It includes request-id exchange recovery, corrected operational retention
-  and admission tombstones, the canonical estimator contract and registry
-  propagation, and a restartable localhost integration stack.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `a9a556c`. It includes
-  request-id recovery, conservative unresolved-job finalization, payer validity
-  telemetry, and signed funding-ceiling enforcement. Its catalog projection
-  still does not expose Modules' estimator metadata; that release gate is
-  tracked by `lmoa-3bv.26`.
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed release head `ac94ba7`
+  (implementation `e9445e8`). It includes request-id exchange recovery,
+  operational retention and admission tombstones, the canonical estimator
+  contract, and identical terminal settlement replay. The 2026-08-24 live
+  multipart run still exposes the funded-EV and terminal-refusal defects
+  tracked by `lmoa-3bv.28` and `.27`.
+- LOC branch `tasks/lpm-v2`: reviewed committed head `752c512` plus an
+  uncommitted restart-conformance extension, which remains external team work.
+  LOC includes estimator catalog pass-through, stale-mint tombstones,
+  conservative unresolved-job finalization, request-id recovery, and signed
+  funding-ceiling enforcement.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 

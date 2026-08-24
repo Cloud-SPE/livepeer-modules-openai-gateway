@@ -83,12 +83,12 @@ for the unresolved financial terminal states.
   (`lmoa-3bv.12`).
 - [x] Migrate unary/multipart endpoints (`lmoa-3bv.13`).
 - [x] Migrate streaming chat without buffering (`lmoa-3bv.14`).
-- [ ] Configure endpoint units, estimates, and ceilings (`lmoa-3bv.15`).
+- [x] Configure endpoint units, estimates, and ceilings (`lmoa-3bv.15`).
 
 ### Phase 4 — prove and cut over
 
 - [x] Replace mode-based diagnostics (`lmoa-3bv.16`).
-- [ ] Build v2 mock contract regressions (`lmoa-3bv.17`).
+- [x] Build v2 mock contract regressions (`lmoa-3bv.17`).
 - [ ] Run signed registry → broker → gateway → LOC conformance
   (`lmoa-3bv.18`).
 - [x] Delete v0 modes and workarounds (`lmoa-3bv.19`).
@@ -196,3 +196,11 @@ for the unresolved financial terminal states.
   fixture emitted 36 total tokens for a request whose prompt plus
   `max_tokens: 8` ceiling was 17. LOC correctly rejected the signed claim as
   `usage_ceiling_exceeded`; `lmoa-3bv.29` tracks fixture compliance.
+- **2026-08-24 — upstream release recheck remains blocked.** Modules release
+  head `ac94ba7` (implementation `e9445e8`) guarantees nonzero credit at its
+  advertised minimum but does not credit the requested funded ceiling. A
+  3-second transcription funded at 3000 wei credited 2 wei, and the resulting
+  broker `insufficient_balance` response again omitted the required zero-unit
+  claim and signed terminal evidence. The gateway must not inflate usage
+  ceilings to compensate; `lmoa-3bv.27` and `.28` remain upstream release
+  gates.
