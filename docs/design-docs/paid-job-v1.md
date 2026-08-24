@@ -143,6 +143,13 @@ Every request supplies a bounded LOC `max_total_units`; a stream may terminate
 when measured usage reaches the funded ceiling. There is no refill or balance
 warning in paid-job work.
 
+LOC validates the payer result before returning an open: the daemon must echo
+the requested `funded_value_wei`, and the envelope's expected value must cover
+that full amount. An underfunded envelope is therefore a failed LOC open with
+no payment or accounting mutation; it never reaches this gateway's broker
+dispatch. This is a safety boundary, not a substitute for the payer minting a
+correctly funded envelope.
+
 Endpoint funding uses the product unit declared by the offering:
 
 | Endpoint | Required unit | Estimate and funded ceiling |
@@ -281,10 +288,12 @@ or Modules package implementation code into this gateway.
   contract, and identical terminal settlement replay. The 2026-08-24 live
   multipart run still exposes the funded-EV and terminal-refusal defects
   tracked by `lmoa-3bv.28` and `.27`.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `3b3eb83`. LOC includes
+- LOC branch `tasks/lpm-v2`: reviewed committed head `d1ab76d` (funding guard
+  implementation `76d42ef`). LOC includes
   estimator catalog pass-through, stale-mint tombstones, conservative
   unresolved-job finalization, request-id recovery, signed funding-ceiling
-  enforcement, and an executable broker-restart settlement-recovery case.
+  enforcement, pre-accounting rejection of underfunded payer envelopes, and
+  an executable broker-restart settlement-recovery case.
   A live unary gateway exchange at this revision settled 33 actual/debited
   tokens and 3 wei through the LOC boundary.
 

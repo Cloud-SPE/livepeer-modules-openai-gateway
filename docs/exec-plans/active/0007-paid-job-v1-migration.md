@@ -211,3 +211,9 @@ for the unresolved financial terminal states.
   tokens, and 3 wei billed before reaching `settled`. This proves the LOC job
   interface used by the gateway; it does not waive the separate broker defects
   affecting multipart work.
+- **2026-08-24 — LOC rejects underfunded envelopes.** LOC `d1ab76d`
+  (`76d42ef`) validates that the payer echoes the requested funded value and
+  returns expected value greater than or equal to it before persisting payment
+  or accounting state. Job-open, session-open, and refill guards are covered;
+  the targeted 13-test verification passes. Current Modules therefore fails
+  closed at LOC open rather than handing the gateway an unusable envelope.
