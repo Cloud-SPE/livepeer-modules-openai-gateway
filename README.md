@@ -383,14 +383,22 @@ foreground, binds the gateway and database to loopback, and gives the gateway
 host networking so LOC's returned `127.0.0.1:8411` broker URL is reachable.
 No service is installed or enabled at host boot.
 
-The pilot currently advertises chat completions only (`default`, unary and
-stream). Transcription fails closed before LOC job open until LOC preserves the
-offering's `multipart-audio-duration/v1` estimator declaration.
+The pilot advertises chat completions (`default`, unary and stream) and audio
+transcription (`default`, multipart). Transcription requires LOC to preserve
+the offering's `multipart-audio-duration/v1` estimator declaration unchanged;
+the gateway fails closed before job open if that contract is absent or drifts.
 
 Check health:
 
 ```bash
 curl http://localhost:4001/health
+```
+
+With a gateway API key, exercise every paid-job transport and wait for signed
+evidence plus LOC settlement:
+
+```bash
+OPENAI_API_KEY='sk-…' make live-conformance
 ```
 
 ### 4. Start the web apps

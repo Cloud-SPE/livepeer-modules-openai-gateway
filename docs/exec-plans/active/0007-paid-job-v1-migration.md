@@ -232,3 +232,18 @@ for the unresolved financial terminal states.
   reactive rotation, and proactive rollover at the real 600-ticket boundary.
   Only new immutable Modules digests and the image-based deployment check
   remain before final pin/cutover.
+- **2026-08-24 — release harness complete.** `make live-conformance` now
+  exercises unary chat, non-buffered SSE through `[DONE]`, and an exact
+  generated three-second WAV through the public gateway. It authenticates via
+  the portal and polls the durable usage surface until all four identities,
+  signed broker usage, and terminal LOC settlement are persisted. Release
+  scripts are part of strict TypeScript lint. `make release-check` validates
+  OCI version/revision, non-root execution, healthcheck, migration 0009, and
+  the absence of a Modules audio package; the release Compose override refuses
+  mutable image tags and removes the source build.
+- **2026-08-24 — immutable Modules artifacts published.** Release record
+  `1241d76` points to matrix-tested source `215e8a4` and records immutable
+  digests. LOC is tagged `v2.0.0` at `f739a28`. Final live image conformance is
+  currently blocked because the running LOC rejects the private pilot API key
+  with HTTP 401; the gateway credential still matches the private credential
+  file. Do not alter LOC account state from this repository.

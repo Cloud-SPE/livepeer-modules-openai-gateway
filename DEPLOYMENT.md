@@ -171,10 +171,10 @@ LOC now passes the `multipart-audio-duration/v1` estimator metadata through,
 and this gateway reproduces that ceiling locally without a Modules runtime or
 build dependency. LOC's 14/14 real-process matrix passes against clean Modules
 `215e8a4`, including the payment expected-value and broker terminal-evidence
-fixes. The published v2.0.0 digests still identify older implementation
-`e9445e8`; do not advertise transcription as ready until deployment uses new
-immutable Modules digests containing `215e8a4` and the image-based deployment
-check passes.
+fixes. Modules release record `1241d76` publishes immutable digests from that
+source. Pin those digests rather than mutable `v2.0.0` tags, then require the
+image-based unary/stream/multipart conformance pass before advertising
+transcription as ready.
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.

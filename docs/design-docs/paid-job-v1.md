@@ -214,13 +214,18 @@ into `settled` or silently converted to zero usage.
 
 ## Open external contracts
 
-Only release packaging and one non-gating reliability-policy cleanup remain:
+Only final image validation and one non-gating reliability-policy cleanup
+remain:
 
-1. **Immutable deployment artifacts.** LOC's 14/14 real-process matrix passes
-   against clean Modules `215e8a4`, but the published Modules `v2.0.0` digest
-   record still points to older implementation `e9445e8`. Deployment must pin
-   newly published immutable digests containing the verified candidate and run
-   the image-based deployment check. Coordination: `lmoa-3bv.6`.
+1. **Pinned-image conformance.** Modules release record `1241d76` publishes
+   immutable images from the matrix-tested source `215e8a4`. The release uses
+   broker `sha256:5ac0abeed7bd73dfae37a95286ff54b18c724a47536c8120d23665475c7de033`,
+   payment daemon `sha256:54aa8e21b0e2ac325145505d36d1f93d3b266a92fc1bae52b173111b4c248aa7`,
+   and registry daemon `sha256:60b436982230ad4d658f3cd7101d53649b4ef0da0861911bf351a42f900710e8`;
+   mutable `v2.0.0` tags are not release inputs. LOC
+   is tagged `v2.0.0` at `f739a28`. Run the gateway's unary/stream/multipart
+   conformance against the digest-pinned deployment before cutover.
+   Coordination: `lmoa-3bv.6` and `lmoa-3bv.18`.
 2. **Debit retry window.** The retry lifecycle is resolved, but its implemented
    timing is not the advertised “10 attempts over 30 minutes.” A 30-second
    sweep with a 10-attempt cap reaches terminal failure in roughly five
@@ -264,14 +269,15 @@ or Modules package implementation code into this gateway.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed candidate head `215e8a4`.
+- Livepeer Modules implementation pin: `215e8a4`; immutable image release
+  record: `1241d76`.
   It includes funded-EV correction, signed/replayable zero-cost post-admission
   refusals, consistent pending-debit evidence, nonce recovery, and conditional
   proactive/reactive work-id rollover. Focused payment and broker suites plus
-  all 41 protocol conformance cases pass. Published
-  `v2.0.0` image digests still point to older implementation `e9445e8`, so new
-  immutable image digests are required before deployment pinning.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `a171f9b`. LOC includes
+  all 41 protocol conformance cases pass. Deploy the immutable digests from the
+  release record, never the mutable `v2.0.0` tag.
+- LOC release pin: tag `v2.0.0` at `f739a28`; current branch bookkeeping head
+  `ab5cef7`. LOC includes
   estimator catalog pass-through, stale-mint tombstones, conservative
   unresolved-job finalization, request-id recovery, signed funding-ceiling
   enforcement, pre-accounting rejection of underfunded payer envelopes, and
@@ -279,7 +285,8 @@ or Modules package implementation code into this gateway.
   consumption. Its full suite passes 410/410, and its 14/14 hermetic
   real-process matrix passes against clean Modules `215e8a4`.
 
-These hashes record what was reviewed; they are not the eventual release pins.
+These hashes are release inputs and remain external integration gates; they are
+not source or package dependencies of this gateway.
 
 The LOC team's confirmation and open release blockers are preserved in
 [the 2026-08-21 LOC reply](../references/2026-08-21-loc-paid-job-reply.md).

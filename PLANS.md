@@ -8,7 +8,7 @@ plan under `docs/exec-plans/active/`; completed plans move to
 
 | Plan | Status |
 |---|---|
-| [`0007-paid-job-v1-migration`](./docs/exec-plans/active/0007-paid-job-v1-migration.md) | Phase 1 — gateway decisions locked; external accounting and metering contracts in coordination. |
+| [`0007-paid-job-v1-migration`](./docs/exec-plans/active/0007-paid-job-v1-migration.md) | Phase 4 — gateway implementation and release tooling complete; final pinned-image conformance and cutover remain. |
 
 ## Completed
 
