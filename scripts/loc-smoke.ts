@@ -19,6 +19,12 @@ const apiKey = requiredEnv('LOC_API_KEY');
 const capability = process.env['LOC_SMOKE_CAPABILITY'] ?? 'openai:chat-completions';
 const offering = process.env['LOC_SMOKE_OFFERING'] ?? 'default';
 const lookupAttempts = positiveIntEnv('LOC_SMOKE_LOOKUP_ATTEMPTS', 60);
+const estimatedUnits = positiveIntEnv('LOC_SMOKE_ESTIMATED_UNITS', 64);
+const maxTotalUnits = positiveIntEnv('LOC_SMOKE_MAX_TOTAL_UNITS', 256);
+
+if (maxTotalUnits < estimatedUnits) {
+  fail('LOC_SMOKE_MAX_TOTAL_UNITS must be greater than or equal to LOC_SMOKE_ESTIMATED_UNITS');
+}
 
 function fail(message: string): never {
   console.error(`✗ ${message}`);
@@ -52,8 +58,8 @@ async function main(): Promise<void> {
     loc,
     capability,
     offering,
-    estimatedUnits: 64,
-    maxTotalUnits: 256,
+    estimatedUnits,
+    maxTotalUnits,
     idempotencyKey: randomUUID(),
     maxJobAttempts: 3,
     body: JSON.stringify({
@@ -73,13 +79,17 @@ async function main(): Promise<void> {
   const evidence = await waitForEvidence(dispatched.jobRef);
   const actualUnits = Number(evidence.actualUnits);
   if (!Number.isSafeInteger(actualUnits)) fail('signed actual units exceed the gateway safe range');
-  const settled = await loc.settleJob(dispatched.jobRef.jobId, {
-    actualUnits,
-    brokerJobId: evidence.brokerJobId,
-    workUnit: evidence.workUnit,
-    outcome: evidence.outcome,
-    settlement: evidence.envelope as unknown as SettlementEnvelope,
-  });
+  const settled = await loc.settleJob(
+    dispatched.jobRef.settleEndpoint,
+    dispatched.jobRef.jobId,
+    {
+      actualUnits,
+      brokerJobId: evidence.brokerJobId,
+      workUnit: evidence.workUnit,
+      outcome: evidence.outcome,
+      settlement: evidence.envelope as unknown as SettlementEnvelope,
+    },
+  );
   pass(
     `LOC settled signed ${evidence.outcome}: actual=${settled.actualUnits} ` +
       `${evidence.workUnit}, billed=${settled.billedValueWei} wei, refund=${settled.refundWei} wei`,
