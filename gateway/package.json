@@ -13,7 +13,7 @@
     "build": "tsc",
     "start": "node ./dist/index.js",
     "dev": "node --watch --import tsx ./src/index.ts",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "test": "rm -rf ./dist-test && tsc -p tsconfig.test.json && node --test ./dist-test/test/**/*.test.js",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"

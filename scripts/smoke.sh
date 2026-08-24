@@ -71,16 +71,16 @@ status=$(curl -s -o /tmp/smoke-approve.json -w "%{http_code}" \
   -X POST -H "X-Admin-Token: $ADMIN_TOKEN" "$GATEWAY/admin/waitlist/$wid/approve")
 require_status 200 "$status" "POST /admin/waitlist/:id/approve"
 
-# Pull the plaintext key out of the gateway logs (email is disabled in
-# default compose; the key was logged with "would have sent").
-key=$(docker compose logs --tail=100 gateway 2>/dev/null | grep -oE 'sk-[A-Za-z0-9_-]{40,}' | tail -1 || true)
-[[ -n "$key" ]] || fail "no plaintext API key found in gateway logs"
-pass "extracted plaintext key (${key:0:11}…)"
+# Approval returns the plaintext exactly once. Read that response directly;
+# email providers deliberately do not log secrets.
+key=$(jq -er '.apiKey.plaintextKey' /tmp/smoke-approve.json) \
+  || fail "approval response did not contain a plaintext API key"
+pass "captured one-time plaintext key (${key:0:11}…)"
 
 # ── 5. portal login + account ────────────────────────────────────
 section "portal cookie flow"
 jar=$(mktemp)
-trap 'rm -f $jar' EXIT
+trap 'rm -f "$jar"' EXIT
 status=$(curl -s -c "$jar" -o /dev/null -w "%{http_code}" \
   -X POST "$GATEWAY/portal/login" \
   -H "Content-Type: application/json" \
