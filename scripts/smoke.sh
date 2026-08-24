@@ -98,11 +98,11 @@ status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/v1/chat/comple
   -d '{"model":"default","messages":[{"role":"user","content":"Return the word smoke."}],"max_tokens":64}')
 require_status 401 "$status" "POST /v1/chat/completions without auth → 401"
 
-status=$(curl -s -o /tmp/smoke-chat.json -w "%{http_code}" -X POST "$GATEWAY/v1/chat/completions" \
-  -H "Authorization: Bearer $key" \
-  -H "Content-Type: application/json" \
-  -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Return the word smoke.\"}],\"max_tokens\":64}")
-require_status 200 "$status" "POST /v1/chat/completions with valid key"
+OPENAI_BASE_URL="$GATEWAY" \
+OPENAI_API_KEY="$key" \
+OPENAI_CHAT_MODEL="$model" \
+  pnpm --dir gateway exec tsx ../scripts/live-conformance.ts \
+  || fail "paid-job/v1 live conformance failed"
 
 # ── 7. usage_reservations recorded the request ──────────────────
 recs=$(docker compose exec -T db \
@@ -126,4 +126,4 @@ grep -q "openai_service_proxy_reservations_total" /tmp/smoke-metrics.txt \
 pass "/metrics exposes openai_service_proxy_reservations_total"
 
 # ── done ────────────────────────────────────────────────────────
-section "smoke passed"
+section "smoke passed — unary, stream, multipart, and settlement"

@@ -11,8 +11,8 @@
 IMAGE ?= tztcloud/openai-service-gateway
 TAG   ?= dev
 
-.PHONY: help install build lint test dev pilot down logs clean smoke loc-smoke web site-ui portal-ui admin-ui \
-        docker-build docker-publish
+.PHONY: help install build lint test dev pilot down logs clean smoke live-conformance loc-smoke web site-ui portal-ui admin-ui \
+        docker-build docker-publish release-check release-config
 
 help:
 	@echo "OpenAI Service — root targets"
@@ -26,6 +26,9 @@ help:
 	@echo "  make down        tear down dev compose stack"
 	@echo "  make logs        tail dev compose logs"
 	@echo "  make smoke       end-to-end smoke test against the dev stack"
+	@echo "  make live-conformance"
+	@echo "                    exercise unary, stream, multipart, and settlement"
+	@echo "                    (requires OPENAI_API_KEY)"
 	@echo "  make loc-smoke   execute and settle a signed paid-job/v1 exchange"
 	@echo "                    (uses the private localhost OpenAI pilot credential)"
 	@echo "  make web         start site + portal + admin dev servers"
@@ -38,6 +41,10 @@ help:
 	@echo "  make docker-publish TAG=v2.0.0"
 	@echo "                    build multi-arch + push to tztcloud/* on Docker Hub"
 	@echo "                    (requires \`docker login docker.io\` first)"
+	@echo "  make release-check TAG=v2.0.0"
+	@echo "                    verify the local release image metadata and contents"
+	@echo "  make release-config GATEWAY_IMAGE=repo@sha256:digest"
+	@echo "                    render the digest-pinned production Compose config"
 	@echo "  make clean       remove node_modules, dist, compose volumes"
 
 install:
@@ -69,6 +76,9 @@ logs:
 
 smoke:
 	./scripts/smoke.sh
+
+live-conformance:
+	@cd gateway && pnpm exec tsx ../scripts/live-conformance.ts
 
 loc-smoke:
 	@credential=../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json; \
@@ -131,3 +141,17 @@ docker-publish:
 		-f gateway/Dockerfile \
 		.
 	@echo "published $(IMAGE):$(TAG) (and :latest)"
+
+release-check:
+	@RELEASE_IMAGE=$(IMAGE):$(TAG) \
+	RELEASE_VERSION=$$(printf '%s' '$(TAG)' | sed 's/^v//') \
+	RELEASE_REVISION=$$(git rev-parse HEAD) \
+	cd gateway && pnpm exec tsx ../scripts/verify-release-image.ts
+
+release-config:
+	@printf '%s' '$(GATEWAY_IMAGE)' | \
+		rg -q '^.+@sha256:[0-9a-f]{64}$$' || { \
+			echo "GATEWAY_IMAGE must be repository@sha256:<64 hex characters>"; exit 1; \
+		}
+	@GATEWAY_IMAGE='$(GATEWAY_IMAGE)' docker compose \
+		-f docker-compose.yml -f docker-compose.release.yml config

@@ -501,14 +501,18 @@ docker compose exec -T db pg_dump \
   -U "${POSTGRES_USER:-openai_service}" "${POSTGRES_DB:-openai_service}" \
   | gzip > "openai-service-pre-v2-$(date +%Y%m%d-%H%M%S).sql.gz"
 
-# 5. Check out the exact gateway release and build/pull the pinned image.
+# 5. Check out the exact gateway release and pull the pinned image.
 git fetch origin --tags
 git checkout v2.0.0
-export GATEWAY_VCS_REF="$(git rev-parse HEAD)"
-docker compose build gateway
+export GATEWAY_IMAGE='tztcloud/openai-service-gateway@sha256:<published-digest>'
+docker pull "$GATEWAY_IMAGE"
+REQUIRE_IMMUTABLE_IMAGE=true RELEASE_IMAGE="$GATEWAY_IMAGE" \
+  RELEASE_REVISION="$(git rev-parse HEAD)" make release-check
+make release-config GATEWAY_IMAGE="$GATEWAY_IMAGE" >/dev/null
 
 # 6. Start it in the managed foreground shell. Do not install a boot service.
-docker compose up gateway
+GATEWAY_IMAGE="$GATEWAY_IMAGE" docker compose \
+  -f docker-compose.yml -f docker-compose.release.yml up gateway
 
 # 7. Watch for clean boot:
 docker compose logs -f gateway
@@ -521,8 +525,10 @@ curl -sf http://localhost:4001/health | jq .
 curl -sf http://localhost:4001/v1/models \
   -H "Authorization: Bearer $SMOKE_API_KEY" | jq .
 
-# 9. Run unary, stream, and exact multipart smokes as in
-# "Real-broker validation". Verify each durable reservation reaches settled.
+# 9. Run unary, stream, and exact multipart smokes. The runner logs in through
+# the portal and verifies every durable reservation reaches signed evidence and
+# terminal LOC settlement.
+OPENAI_API_KEY="$SMOKE_API_KEY" make live-conformance
 
 # 10. Re-enable /v1/* traffic and watch pending settlements, LOC-open errors,
 # broker protocol errors, and duplicate execution/debit indicators.

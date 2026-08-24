@@ -1,0 +1,7 @@
+# Production release override. GATEWAY_IMAGE must be an immutable digest,
+# never a mutable tag. Compose validates the variable before changing state.
+
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?Set GATEWAY_IMAGE to repository@sha256:digest}
+    build: !reset null
