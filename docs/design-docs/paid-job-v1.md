@@ -214,49 +214,17 @@ into `settled` or silently converted to zero usage.
 
 ## Open external contracts
 
-These block release, but not the independent catalog/client/schema retrofit:
+Only release packaging and one non-gating reliability-policy cleanup remain:
 
-1. **Never-admitted outcome conformance.** The policy is final: the
-   deployed chain contract has no unconditional envelope expiry because
-   governance can retroactively extend or revive tickets. LOC implements no
-   abandon, automatic refund, or re-encumbrance. Valid signed settlement is
-   settled accurately; absence of terminal evidence remains unresolved; an
-   operational deadline may produce a distinct idempotent
-   `conservative_full_charge`; signed `NOT_ADMITTED` is attributable audit
-   evidence only. The conservative outcome retains issuance/deadline fields,
-   observed chain telemetry, reason, and evidence without inventing usage or a
-   network debit. LOC has implemented the policy; the remaining gate is a live
-   deadline/restart exercise proving these states. No gateway implementation
-   change is requested. Coordination: `lmoa-3bv.3`.
-2. **Settlement recovery by request id.** Modules exposes
-   `GET /v1/exchange/{request_id}` with `SETTLED`, `ACCOUNTING_PENDING`,
-   `IN_FLIGHT`, `NOT_ADMITTED`, and `NO_RECORD` outcomes. LOC consumes it
-   idempotently and live conformance proves ordinary withheld-settlement
-   recovery and cross-request isolation. Restart recovery and the remaining
-   accounting outcomes still require a completed joint run.
-   Coordination: `lmoa-3bv.23`.
-3. **Settlement retention conformance.** `paid-job` 1.0.14-draft defines a
-   finite operational retention rule derived from LOC's conservative-charge
-   deadline, recovery window, and scheduler margin. The pilot configures a
-   persistent broker store with 96-hour retention. A joint restart/eviction
-   run must still prove that terminal evidence survives restart and that
-   admission tombstones prevent eviction from becoming false non-admission.
-   Coordination: `lmoa-3bv.24`.
-4. **Debit retry window.** The retry lifecycle is resolved, but its implemented
+1. **Immutable deployment artifacts.** LOC's 14/14 real-process matrix passes
+   against clean Modules `215e8a4`, but the published Modules `v2.0.0` digest
+   record still points to older implementation `e9445e8`. Deployment must pin
+   newly published immutable digests containing the verified candidate and run
+   the image-based deployment check. Coordination: `lmoa-3bv.6`.
+2. **Debit retry window.** The retry lifecycle is resolved, but its implemented
    timing is not the advertised “10 attempts over 30 minutes.” A 30-second
    sweep with a 10-attempt cap reaches terminal failure in roughly five
    minutes. Coordination: `lmoa-3bv.22`.
-5. **Funded expected value conformance.** Modules `5f60f51` now discovers the
-   payee probability, re-quotes a face value whose expected credit covers the
-   requested funding intent, and fails closed if the payee cannot provide it.
-   LOC independently rejects an underfunded daemon response. The focused
-   sender/receiver tests pass; LOC's real-process matrix is the remaining gate.
-   Coordination: `lmoa-3bv.28`.
-6. **Terminal funding-refusal conformance.** Modules `01ad251` and `0e89b3d`
-   make a post-admission `insufficient_balance` refusal explicit, signed,
-   retrievable by request and job id, and identically replayable without
-   backend execution. The focused broker tests pass; LOC's real-process matrix
-   is the remaining gate. Coordination: `lmoa-3bv.27`.
 
 The release gate pins immutable upstream revisions only after these contracts
 land. Those pins gate joint behavior; they do not import broker, daemon, LOC,
@@ -281,24 +249,35 @@ or Modules package implementation code into this gateway.
   retains the broker extractor, estimator id, rounding/exactness rules, and
   shared fixture location/vectors. LOC passes those contract fields through
   unchanged; no package name is advertised or consumed.
+- **Never-admitted recovery.** LOC preserves unresolved jobs, applies the
+  auditable `conservative_full_charge` policy without fabricating usage or
+  network debit, and treats signed `NOT_ADMITTED` as audit evidence only.
+- **Request-id recovery and retention.** LOC recovers broker evidence by stable
+  request id. The joint matrix proves withheld-settlement recovery and exact
+  evidence across broker restart; broker tests cover retention eviction,
+  accounting-pending protection, and durable admission tombstones.
+- **Funding and refusal evidence.** Modules `215e8a4` funds the requested EV,
+  rotates safely at the real nonce boundary, emits no contradictory terminal
+  claim while accounting is pending, and signs/replays identity-bound zero-cost
+  post-admission refusals. LOC independently rejects underfunded envelopes.
+  LOC's hermetic real-process matrix passes 14/14 against this clean revision.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed candidate head `0e89b3d`.
-  It includes funded-EV correction (`5f60f51`), signed/replayable zero-cost
-  post-admission refusals (`01ad251`, `0e89b3d`), and removal of contradictory
-  terminal evidence while accounting is pending (`0730863`). Focused payment
-  and broker suites plus all 41 protocol conformance cases pass. Published
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed candidate head `215e8a4`.
+  It includes funded-EV correction, signed/replayable zero-cost post-admission
+  refusals, consistent pending-debit evidence, nonce recovery, and conditional
+  proactive/reactive work-id rollover. Focused payment and broker suites plus
+  all 41 protocol conformance cases pass. Published
   `v2.0.0` image digests still point to older implementation `e9445e8`, so new
   immutable image digests are required before deployment pinning.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `d1ab76d` (funding guard
-  implementation `76d42ef`). LOC includes
+- LOC branch `tasks/lpm-v2`: reviewed committed head `a171f9b`. LOC includes
   estimator catalog pass-through, stale-mint tombstones, conservative
   unresolved-job finalization, request-id recovery, signed funding-ceiling
   enforcement, pre-accounting rejection of underfunded payer envelopes, and
-  an executable broker-restart settlement-recovery case.
-  A live unary gateway exchange at this revision settled 33 actual/debited
-  tokens and 3 wei through the LOC boundary.
+  broker-restart settlement recovery and strict proactive/reactive rollover
+  consumption. Its full suite passes 410/410, and its 14/14 hermetic
+  real-process matrix passes against clean Modules `215e8a4`.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 

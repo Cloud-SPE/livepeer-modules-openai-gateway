@@ -50,11 +50,11 @@ Out of scope:
   (`lmoa-3bv.5`).
 - [x] Resolve durable debit retry and `DEBIT_FAILED` with Modules and LOC
   (`lmoa-3bv.2`).
-- [ ] Resolve LOC reservations that never reach broker admission
+- [x] Resolve LOC reservations that never reach broker admission
   (`lmoa-3bv.3`).
-- [ ] Add independent broker settlement recovery by LOC request id
+- [x] Add independent broker settlement recovery by LOC request id
   (`lmoa-3bv.23`).
-- [ ] Resolve broker settlement retention under governance-revivable envelopes
+- [x] Resolve broker settlement retention under governance-revivable envelopes
   (`lmoa-3bv.24`).
 - [x] Land transcription duration metering (`lmoa-3bv.4`).
 - [ ] Align the effective debit retry schedule with its advertised recovery
@@ -224,3 +224,11 @@ for the unresolved financial terminal states.
   complete real-process matrix remains the behavioral gate. The published
   Modules `v2.0.0` image record still references `e9445e8`; deployment must
   wait for new immutable digests built from the verified candidate.
+- **2026-08-24 — LOC integration complete.** LOC `a171f9b` passes check,
+  layering, typecheck, and 410/410 tests. Its committed audit records a 14/14
+  hermetic real-process matrix against clean Modules `215e8a4`, covering
+  funded EV, job idempotency, request-id settlement recovery, cross-request
+  and tamper rejection, signed close, broker restart, pending-debit recovery,
+  reactive rotation, and proactive rollover at the real 600-ticket boundary.
+  Only new immutable Modules digests and the image-based deployment check
+  remain before final pin/cutover.

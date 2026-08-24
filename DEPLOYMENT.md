@@ -169,11 +169,12 @@ make loc-smoke   # executes a paid job and submits its signed settlement
 The pilot supports `openai:chat-completions/default` over unary and stream.
 LOC now passes the `multipart-audio-duration/v1` estimator metadata through,
 and this gateway reproduces that ceiling locally without a Modules runtime or
-build dependency. Modules candidate `0e89b3d` contains the payment
-expected-value and broker terminal-evidence fixes, but the published v2.0.0
-digests still identify older implementation `e9445e8`. Do not advertise
-transcription as ready until LOC's real-process matrix passes and deployment
-uses newly published immutable Modules digests containing the verified fixes.
+build dependency. LOC's 14/14 real-process matrix passes against clean Modules
+`215e8a4`, including the payment expected-value and broker terminal-evidence
+fixes. The published v2.0.0 digests still identify older implementation
+`e9445e8`; do not advertise transcription as ready until deployment uses new
+immutable Modules digests containing `215e8a4` and the image-based deployment
+check passes.
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.
