@@ -281,11 +281,12 @@ or Modules package implementation code into this gateway.
   contract, and identical terminal settlement replay. The 2026-08-24 live
   multipart run still exposes the funded-EV and terminal-refusal defects
   tracked by `lmoa-3bv.28` and `.27`.
-- LOC branch `tasks/lpm-v2`: reviewed committed head `752c512` plus an
-  uncommitted restart-conformance extension, which remains external team work.
-  LOC includes estimator catalog pass-through, stale-mint tombstones,
-  conservative unresolved-job finalization, request-id recovery, and signed
-  funding-ceiling enforcement.
+- LOC branch `tasks/lpm-v2`: reviewed committed head `3b3eb83`. LOC includes
+  estimator catalog pass-through, stale-mint tombstones, conservative
+  unresolved-job finalization, request-id recovery, signed funding-ceiling
+  enforcement, and an executable broker-restart settlement-recovery case.
+  A live unary gateway exchange at this revision settled 33 actual/debited
+  tokens and 3 wei through the LOC boundary.
 
 These hashes record what was reviewed; they are not the eventual release pins.
 

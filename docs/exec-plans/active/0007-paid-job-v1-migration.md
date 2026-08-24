@@ -204,3 +204,10 @@ for the unresolved financial terminal states.
   claim and signed terminal evidence. The gateway must not inflate usage
   ceilings to compensate; `lmoa-3bv.27` and `.28` remain upstream release
   gates.
+- **2026-08-24 — current LOC boundary proven.** LOC `3b3eb83` successfully
+  opened and settled a fresh unary chat exchange selected through its catalog.
+  Gateway reservation `893451cb-0b1a-4a83-8b40-44724333260e` retained the LOC
+  job, stable request id, broker job, signed evidence, 33 actual/debited
+  tokens, and 3 wei billed before reaching `settled`. This proves the LOC job
+  interface used by the gateway; it does not waive the separate broker defects
+  affecting multipart work.
