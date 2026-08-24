@@ -246,15 +246,17 @@ These block release, but not the independent catalog/client/schema retrofit:
    timing is not the advertised “10 attempts over 30 minutes.” A 30-second
    sweep with a 10-attempt cap reaches terminal failure in roughly five
    minutes. Coordination: `lmoa-3bv.22`.
-5. **Funded expected value.** A requested 3,000-wei transcription ceiling still
-   produces only 2 wei of payee credit because the payer uses the requested
-   value as ticket face value under a low win probability. The payment envelope
-   must credit the funded ceiling, subject only to explicitly defined rounding.
+5. **Funded expected value conformance.** Modules `5f60f51` now discovers the
+   payee probability, re-quotes a face value whose expected credit covers the
+   requested funding intent, and fails closed if the payee cannot provide it.
+   LOC independently rejects an underfunded daemon response. The focused
+   sender/receiver tests pass; LOC's real-process matrix is the remaining gate.
    Coordination: `lmoa-3bv.28`.
-6. **Terminal funding refusals.** The broker's post-admission
-   `insufficient_balance` response omits `Livepeer-Work-Units: 0` and durable
-   signed terminal evidence, leaving request-id recovery outcome-unknown.
-   Coordination: `lmoa-3bv.27`.
+6. **Terminal funding-refusal conformance.** Modules `01ad251` and `0e89b3d`
+   make a post-admission `insufficient_balance` refusal explicit, signed,
+   retrievable by request and job id, and identically replayable without
+   backend execution. The focused broker tests pass; LOC's real-process matrix
+   is the remaining gate. Coordination: `lmoa-3bv.27`.
 
 The release gate pins immutable upstream revisions only after these contracts
 land. Those pins gate joint behavior; they do not import broker, daemon, LOC,
@@ -282,12 +284,13 @@ or Modules package implementation code into this gateway.
 
 ## Reviewed upstream baseline
 
-- Livepeer Modules branch `tasks/lpm-v2`: reviewed release head `ac94ba7`
-  (implementation `e9445e8`). It includes request-id exchange recovery,
-  operational retention and admission tombstones, the canonical estimator
-  contract, and identical terminal settlement replay. The 2026-08-24 live
-  multipart run still exposes the funded-EV and terminal-refusal defects
-  tracked by `lmoa-3bv.28` and `.27`.
+- Livepeer Modules branch `tasks/lpm-v2`: reviewed candidate head `0e89b3d`.
+  It includes funded-EV correction (`5f60f51`), signed/replayable zero-cost
+  post-admission refusals (`01ad251`, `0e89b3d`), and removal of contradictory
+  terminal evidence while accounting is pending (`0730863`). Focused payment
+  and broker suites plus all 41 protocol conformance cases pass. Published
+  `v2.0.0` image digests still point to older implementation `e9445e8`, so new
+  immutable image digests are required before deployment pinning.
 - LOC branch `tasks/lpm-v2`: reviewed committed head `d1ab76d` (funding guard
   implementation `76d42ef`). LOC includes
   estimator catalog pass-through, stale-mint tombstones, conservative

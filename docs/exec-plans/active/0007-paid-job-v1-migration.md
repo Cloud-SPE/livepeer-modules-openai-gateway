@@ -217,3 +217,10 @@ for the unresolved financial terminal states.
   or accounting state. Job-open, session-open, and refill guards are covered;
   the targeted 13-test verification passes. Current Modules therefore fails
   closed at LOC open rather than handing the gateway an unusable envelope.
+- **2026-08-24 — Modules source fixes verified.** Candidate `0e89b3d` contains
+  funded-EV sizing, signed/replayable post-admission refusal evidence, and a
+  single authoritative terminal outcome after pending debit. Focused payment
+  and broker suites pass, as do all 41 protocol conformance cases. LOC's
+  complete real-process matrix remains the behavioral gate. The published
+  Modules `v2.0.0` image record still references `e9445e8`; deployment must
+  wait for new immutable digests built from the verified candidate.
