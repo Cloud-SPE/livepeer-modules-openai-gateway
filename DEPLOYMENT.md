@@ -476,40 +476,72 @@ Recommended starter alerts:
 
 ## Upgrades
 
+### Breaking v2.0.0 cutover
+
+This is not a rolling dual-protocol upgrade. Do not run a v1 gateway beside a
+v2 gateway and do not send new work to the old broker contract after the
+cutover begins.
+
 ```bash
-# 1. Pull the new image (or rebuild from a new tag)
-git fetch origin && git checkout v1.x
+# 1. Verify the external release gate before touching the running gateway.
+# Record the LOC revision and immutable Modules image digests that passed the
+# real-process matrix; mutable v2.0.0 tags are not sufficient evidence.
+
+# 2. Stop NEW /v1/* traffic at the reverse proxy, but leave the old gateway
+# running so its durable settlement workers can drain.
+
+# 3. Wait for gateway accounting to drain.
+curl -sf http://127.0.0.1:4001/health | jq '.pendingSettlements'
+# Continue only when this is 0. Also inspect the admin usage view for
+# settlement_lookup_pending, loc_settle_pending, and permanent failures.
+
+# 4. Take a Postgres backup after the drain and before migration.
+docker compose exec -T db pg_dump \
+  -U "${POSTGRES_USER:-openai_service}" "${POSTGRES_DB:-openai_service}" \
+  | gzip > "openai-service-pre-v2-$(date +%Y%m%d-%H%M%S).sql.gz"
+
+# 5. Check out the exact gateway release and build/pull the pinned image.
+git fetch origin --tags
+git checkout v2.0.0
 docker compose build gateway
 
-# 2. Apply in a managed foreground shell
+# 6. Start it in the managed foreground shell. Do not install a boot service.
 docker compose up gateway
 
-# 3. Watch for clean boot:
+# 7. Watch for clean boot:
 docker compose logs -f gateway
 # Look for:
-#   [migrations] migration NNNN_xxx.sql: applied
+#   migrations through 0009 applied
 #   Server listening at http://0.0.0.0:4001
 
-# 4. Confirm /health is 200:
+# 8. Confirm health and the LOC-backed catalog:
 curl -sf http://localhost:4001/health | jq .
+curl -sf http://localhost:4001/v1/models \
+  -H "Authorization: Bearer $SMOKE_API_KEY" | jq .
 
-# 5. Smoke a /v1/* call as in "Real-broker validation" §3.
+# 9. Run unary, stream, and exact multipart smokes as in
+# "Real-broker validation". Verify each durable reservation reaches settled.
+
+# 10. Re-enable /v1/* traffic and watch pending settlements, LOC-open errors,
+# broker protocol errors, and duplicate execution/debit indicators.
 ```
 
 ### Rollback
 
-If the new gateway image misbehaves:
+Do not reactivate the v1 protocol path after v2 has admitted work. A v1 image
+cannot safely reconcile v2 identities and signed evidence, and database
+migration `0005` deliberately clears the rebuildable v0 model cache.
 
-```bash
-git checkout v1.previous
-docker compose build gateway
-docker compose up gateway
-```
+- If no v2 job was admitted, stop the v2 process, restore the pre-cutover
+  database backup, and return traffic to the pre-cutover deployment.
+- If any v2 job was admitted, keep the v2 database and settlement workers
+  available, disable new traffic, and fix forward. Preserve every LOC job id,
+  broker request/job id, and signed claim.
+- Never edit or reverse an applied migration in place. A corrective schema
+  change is a new forward migration.
 
-Watch out for **migration rollback**: a forward migration that's
-already been applied won't be undone by checking out the old image.
-If you need to roll a migration back, write a fresh migration that
-undoes it (don't edit history).
+The normal recovery is fix-forward. Restoring the pre-v2 backup is permitted
+only when no v2 accounting identity can be lost.
 
 ---
 
