@@ -1,12 +1,16 @@
-# OpenAI Service gateway — multi-stage Node 24 build.
+# OpenAI Service gateway — multi-stage Node build.
+
+ARG NODE_VERSION=24
 
 # ── builder ───────────────────────────────────────────────────────────
-FROM node:24-bookworm-slim AS builder
+FROM node:${NODE_VERSION}-bookworm-slim AS builder
+
+ARG PNPM_VERSION=10.0.0
 
 WORKDIR /app
 
 # Install pnpm via corepack.
-RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
 
 # Copy workspace plumbing so pnpm can resolve workspace deps.
 COPY pnpm-workspace.yaml package.json ./
@@ -23,9 +27,10 @@ COPY web/ web/
 RUN pnpm --filter @livepeer-modules-openai/gateway build
 
 # ── runtime ───────────────────────────────────────────────────────────
-FROM node:24-bookworm-slim AS runtime
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 
 ARG APP_VERSION=2.0.0
+ARG BUILD_VERSION=dev
 ARG VCS_REF=unknown
 
 LABEL org.opencontainers.image.title="Livepeer Modules OpenAI Gateway" \
@@ -33,6 +38,7 @@ LABEL org.opencontainers.image.title="Livepeer Modules OpenAI Gateway" \
       org.opencontainers.image.source="https://github.com/Cloud-SPE/livepeer-modules-openai-gateway" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.ref.name="${BUILD_VERSION}" \
       org.opencontainers.image.revision="${VCS_REF}"
 
 # Reasonable defaults; everything else comes from env at deploy time.

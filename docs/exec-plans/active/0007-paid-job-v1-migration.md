@@ -247,3 +247,9 @@ for the unresolved financial terminal states.
   currently blocked because the running LOC rejects the private pilot API key
   with HTTP 401; the gateway credential still matches the private credential
   file. Do not alter LOC account state from this repository.
+- **2026-09-05 — image build entrypoint consolidated.**
+  `infra/scripts/build-images.sh` is now the shared local, Make, and tagged-CI
+  build path. It derives auditable git build metadata, pins the Node and pnpm
+  build inputs, rejects mismatched tags and dirty publishes, preserves the
+  `linux/amd64,linux/arm64` release contract, prints the immutable manifest
+  digest, and does not implicitly move `latest`.

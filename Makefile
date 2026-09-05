@@ -5,8 +5,8 @@
 .DEFAULT_GOAL := help
 
 # ── Docker image publishing ─────────────────────────────────────────
-# Matches the CI publish target and sibling gateway repos: manual
-# publish with multi-arch buildx, pushed to tztcloud/* on Docker Hub.
+# The checked-in build script is the single source of truth for local and CI
+# image builds. These variables preserve the convenient Make interface.
 # Authenticate first with `docker login docker.io -u <your-dockerhub-username>`.
 IMAGE ?= tztcloud/openai-service-gateway
 TAG   ?= dev
@@ -116,36 +116,20 @@ clean:
 # Requires `docker login docker.io` first; refuses to push :dev.
 
 docker-build:
-	docker build \
-		--build-arg APP_VERSION=$$(printf '%s' '$(TAG)' | sed 's/^v//') \
-		--build-arg VCS_REF=$$(git rev-parse --short=12 HEAD) \
-		-t $(IMAGE):$(TAG) -f gateway/Dockerfile .
-	@echo "built $(IMAGE):$(TAG)"
+	@REGISTRY=$$(printf '%s' '$(IMAGE)' | sed 's|/[^/]*$$||') \
+	IMAGE_NAME=$$(printf '%s' '$(IMAGE)' | sed 's|.*/||') \
+	TAG='$(TAG)' ./infra/scripts/build-images.sh
 
 docker-publish:
-	@if [ "$(TAG)" = "dev" ]; then \
-		echo "refusing to publish :dev — set TAG (e.g. make docker-publish TAG=v2.0.0)"; \
-		exit 1; \
-	fi
-	@# Default Docker driver doesn't support multi-arch — ensure a
-	@# docker-container buildx builder exists for cross-arch builds.
-	@docker buildx inspect multiarch >/dev/null 2>&1 || \
-		docker buildx create --name multiarch --driver docker-container --bootstrap
-	docker buildx build --builder multiarch \
-		--platform linux/amd64,linux/arm64 \
-		--build-arg APP_VERSION=$$(printf '%s' '$(TAG)' | sed 's/^v//') \
-		--build-arg VCS_REF=$$(git rev-parse --short=12 HEAD) \
-		--push \
-		-t $(IMAGE):$(TAG) \
-		-t $(IMAGE):latest \
-		-f gateway/Dockerfile \
-		.
-	@echo "published $(IMAGE):$(TAG) (and :latest)"
+	@REGISTRY=$$(printf '%s' '$(IMAGE)' | sed 's|/[^/]*$$||') \
+	IMAGE_NAME=$$(printf '%s' '$(IMAGE)' | sed 's|.*/||') \
+	TAG='$(TAG)' PUSH=1 ./infra/scripts/build-images.sh
 
 release-check:
-	@RELEASE_IMAGE=$(IMAGE):$(TAG) \
-	RELEASE_VERSION=$$(printf '%s' '$(TAG)' | sed 's/^v//') \
-	RELEASE_REVISION=$$(git rev-parse HEAD) \
+	@export RELEASE_IMAGE='$(IMAGE):$(TAG)'; \
+	export RELEASE_VERSION=$$(printf '%s' '$(TAG)' | sed 's/^v//'); \
+	export RELEASE_BUILD_VERSION=$$(VERSION_PREFIX='$(TAG)' FALLBACK_VERSION='$(TAG)' ./infra/build/git-version.sh); \
+	export RELEASE_REVISION=$$(git rev-parse HEAD); \
 	cd gateway && pnpm exec tsx ../scripts/verify-release-image.ts
 
 release-config:

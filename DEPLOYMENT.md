@@ -483,6 +483,18 @@ This is not a rolling dual-protocol upgrade. Do not run a v1 gateway beside a
 v2 gateway and do not send new work to the old broker contract after the
 cutover begins.
 
+Build and publish the release from the exact, clean tag. The same checked-in
+script runs locally and in tagged CI; publishing produces a multi-architecture
+manifest and prints the immutable digest without moving `latest`:
+
+```bash
+git checkout v2.0.0
+PUSH=1 ./infra/scripts/build-images.sh
+```
+
+Record the printed `tztcloud/openai-service-gateway@sha256:…` reference as the
+gateway release input used below.
+
 ```bash
 # 1. Verify the external release gate before touching the running gateway.
 # Record the LOC revision and immutable Modules image digests that passed the

@@ -25,6 +25,7 @@ const image = process.env['RELEASE_IMAGE'] ??
   `tztcloud/openai-service-gateway:v${packageVersion}`;
 const expectedVersion = process.env['RELEASE_VERSION'] ?? packageVersion;
 const expectedRevision = process.env['RELEASE_REVISION'] ?? git('rev-parse', 'HEAD');
+const expectedBuildVersion = process.env['RELEASE_BUILD_VERSION'];
 const requireImmutable = process.env['REQUIRE_IMMUTABLE_IMAGE'] === 'true';
 
 function fail(message: string): never {
@@ -58,6 +59,15 @@ function main(): void {
     fail(
       `image version ${labels['org.opencontainers.image.version'] ?? '<missing>'} ` +
         `does not match ${expectedVersion}`,
+    );
+  }
+  if (
+    expectedBuildVersion &&
+    labels['org.opencontainers.image.ref.name'] !== expectedBuildVersion
+  ) {
+    fail(
+      `image build version ${labels['org.opencontainers.image.ref.name'] ?? '<missing>'} ` +
+        `does not match ${expectedBuildVersion}`,
     );
   }
   const actualRevision = labels['org.opencontainers.image.revision'];

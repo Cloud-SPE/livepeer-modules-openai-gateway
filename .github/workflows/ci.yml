@@ -63,14 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Build (no push)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: gateway/Dockerfile
-          push: false
-          tags: openai-service-gateway:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: REGISTRY=local TAG=ci ./infra/scripts/build-images.sh
 
   docker-publish:
     name: Docker publish (gateway)
@@ -123,17 +116,6 @@ jobs:
           NODE
 
       - name: Build + push (multi-arch)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: gateway/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            APP_VERSION=${{ steps.meta.outputs.version }}
-            VCS_REF=${{ github.sha }}
-          tags: |
-            tztcloud/openai-service-gateway:${{ steps.meta.outputs.tag }}
-            tztcloud/openai-service-gateway:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: PUSH=1 ./infra/scripts/build-images.sh

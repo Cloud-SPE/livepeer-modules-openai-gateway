@@ -29,6 +29,8 @@ runners/embeddings/bin/
 # python virtualenvs already covered above; add wheels / build dirs
 *.egg-info/
 build/
+!infra/build/
+!infra/build/**
 .pip-cache/
 
 # logs

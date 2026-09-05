@@ -340,8 +340,22 @@ pnpm -F @livepeer-modules-openai/gateway test
 ### Container build
 
 ```bash
-docker compose build gateway
+./infra/scripts/build-images.sh
 ```
+
+This is the canonical image builder used by both Make and CI. A local build
+targets the host architecture and may include uncommitted work. A release
+publish requires an exact version tag and clean worktree, builds
+`linux/amd64,linux/arm64`, and prints the immutable manifest digest:
+
+```bash
+git checkout v2.0.0
+PUSH=1 ./infra/scripts/build-images.sh
+```
+
+Publishing moves only `tztcloud/openai-service-gateway:v2.0.0`; it does not
+silently move `latest`. Deploy the printed `repository@sha256:…` reference,
+not the tag. `make docker-build` and `make docker-publish` are thin aliases.
 
 ## Quick Start
 
