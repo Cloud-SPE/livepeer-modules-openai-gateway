@@ -5,6 +5,23 @@ contracts with no compatibility path.
 
 **Beads epic:** `lmoa-3bv`
 
+## Current baseline — 2026-09-22
+
+The August implementation and release evidence below are historical. Modules
+`08f5985` and LOC `6a6392a` now require wholesale spend authorization, exact
+request-body commitments, caller proof, and settlement-domain bindings. The
+current gateway `bc231d2` is incompatible; work is no longer limited to image
+pinning and cutover. See the
+[compatibility review](../../references/2026-09-22-upstream-compatibility-review.md).
+
+The existing Beads epic retains completed August work as history and tracks
+the new migration tasks and refreshed release gates. Its migration-design
+task must update the approach and acceptance below before runtime changes.
+LOC continues to own chain keys, aggregate wholesale funding, and settlement
+verification; a gateway invocation-proof key is a separate responsibility.
+The integration stack now uses a conformance runner rather than the removed
+Python OpenAI fixture, so OpenAI endpoint coverage must be established again.
+
 ## Context
 
 Livepeer Modules 2.0 defines one paid-job protocol with a per-request transport.
@@ -253,3 +270,59 @@ for the unresolved financial terminal states.
   build inputs, rejects mismatched tags and dirty publishes, preserves the
   `linux/amd64,linux/arm64` release contract, prints the immutable manifest
   digest, and does not implicitly move `latest`.
+
+## Protocol-4 implementation decision — 2026-09-22
+
+The current migration uses the existing HTTP boundary, without an SDK or
+Modules runtime dependency. `loc/authorization.ts` prepares the exact final
+request bytes and creates a per-invocation secp256k1 caller key using the
+same noble primitives as LOC's reference example. The proof signs the
+returned authorization bytes with the specified domain-separated EIP-191
+scheme. This key cannot sign LOC payments and is never logged or persisted.
+One preparation is reused for every identical LOC open attempt. Multipart
+is serialized once before hashing; response SSE is never buffered.
+
+Before opening LOC, persist the non-secret open intent (digest, public key,
+ceiling and idempotency key). Persist the returned authorization, route
+snapshot, accounting mode and identities before dispatch. Recovery may
+repeat the identical open to discover its job, but never redispatch workload
+bytes after a restart. LOC independently reconciles an unused authorization;
+the private caller key and workload body are unnecessary for accounting
+recovery. This deliberately avoids durable storage of customer prompts and
+caller private keys.
+
+Migration 0010 adds nullable fields so historical rows remain intact. New
+rows bind settlement evidence to the authorization and settlement domain in
+addition to existing request/job/work-unit identity. LOC remains the verifier
+of delegated signatures and authoritative accounting. Gateway status polling
+records LOC's state separately; a conservative charge or non-admission audit
+is never fabricated as a broker settlement or customer refund.
+
+The catalog requires positive safe-integer price denominators and carries
+them into persistence/diagnostics. Unsupported estimators remain fail-closed.
+Production catalog omissions are upstream issues, not permission to invent
+metadata. Validation covers exact bytes, proof recovery, retries, domain
+drift, durable recovery, SQL migration, incremental SSE, and bounded real
+requests against the configured production LOC. Production testing must not
+alter upstream deployments, account policy, or funding configuration.
+
+Release evidence distinguishes source/local-image validation, production
+LOC interoperability, and immutable multi-service image certification.
+Beads close only for observed results; unavailable upstream artifacts or
+capabilities remain explicit blockers.
+
+## Implementation and live validation — 2026-09-22
+
+Protocol-4 gateway implementation is complete locally, including migration 0010,
+caller-bound exact-byte dispatch, restart accounting recovery, domain persistence
+and denominator preservation. Strict lint/build pass; 140 default tests pass and
+the optional Postgres integration case passed separately. Production LOC chat,
+SSE and speech completed with durable signed settlement. The final development
+container is run against production LOC using the existing configured API key.
+
+[Validation evidence](../../references/2026-09-22-production-validation.md)
+distinguishes these results from full release certification. The plan stays
+active: missing production transcription estimator metadata, embeddings route/
+admission failures, absent image/rerank offerings, and unknown running upstream
+image digests prevent closing the full conformance/cutover gates. The supplied
+production Compose confirms service names but leaves image tags interpolated.

@@ -1,11 +1,10 @@
-// Inlined Livepeer-* header constants. Mirrors
-// @tztcloud/livepeer-gateway-middleware src/headers.ts; will be replaced
-// with the package import once npm-workspace plumbing lands (tech-debt).
+// Current paid-job/v1 invocation and evidence headers (network protocol 4).
 
 export const HEADER = {
   CAPABILITY: "Livepeer-Capability",
   OFFERING: "Livepeer-Offering",
-  PAYMENT: "Livepeer-Payment",
+  AUTHORIZATION: "Livepeer-Authorization",
+  CALLER_PROOF: "Livepeer-Caller-Proof",
   PROTOCOL: "Livepeer-Protocol",
   REQUEST_ID: "Livepeer-Request-Id",
   BACKOFF: "Livepeer-Backoff",

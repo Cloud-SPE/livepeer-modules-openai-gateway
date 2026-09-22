@@ -63,7 +63,7 @@ async function main(): Promise<void> {
     idempotencyKey: randomUUID(),
     maxJobAttempts: 3,
     body: JSON.stringify({
-      model: offering,
+      model: (selected.extra['openai'] as { model?: string } | undefined)?.model ?? offering,
       messages: [{ role: 'user', content: 'Return the word smoke.' }],
       max_tokens: 64,
     }),

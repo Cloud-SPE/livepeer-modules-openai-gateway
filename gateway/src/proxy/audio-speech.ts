@@ -14,6 +14,7 @@ import {
   commitReservation,
   openReservation,
   recordPaidJob,
+  recordJobPrepared,
   recordSelectedRoute,
   failReservation,
 } from './reservation.js';
@@ -62,7 +63,7 @@ export async function registerAudioSpeechRoute(
         capability,
         requestedModel,
         transport: 'unary',
-        expectedWorkUnit: 'characters',
+        expectedWorkUnit: ['characters', 'input_chars'],
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
@@ -79,6 +80,7 @@ export async function registerAudioSpeechRoute(
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
           idempotencyKey: handle.workId,
+          onJobPrepared: (request) => recordJobPrepared(deps, handle, request),
           onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);

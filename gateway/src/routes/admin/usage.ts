@@ -96,6 +96,9 @@ export async function registerAdminUsageRoutes(
           locSettledUnits: r.locSettledUnits,
           locBilledValueWei: r.locBilledValueWei,
           locSettlementOutcome: r.locSettlementOutcome,
+          locAccountingState: r.locAccountingState,
+          locAccountingOutcome: r.locAccountingOutcome,
+          settlementDomainId: r.settlementDomainId,
           settleState: r.settleState as 'pending' | 'settled' | 'failed' | null,
           settleAttempts: r.settleAttempts,
           terminalEvidenceType: r.terminalEvidenceType as

@@ -1,3 +1,4 @@
+import { startRecovery } from './loc/recovery.js';
 // Entry point. Boot order:
 //   1. Load config + warn on missing peppers.
 //   2. Connect Postgres + run migrations.
@@ -106,6 +107,7 @@ async function main(): Promise<void> {
     intervalMs: config.registryRefreshIntervalMs,
     log: app.log,
   });
+  const cancelRecovery = startRecovery(db, loc, config.locSettleIntervalMs, app.log);
   const cancelSettler = startSettler({
     db,
     loc,
@@ -125,6 +127,7 @@ async function main(): Promise<void> {
     try {
       cancelRefresh();
       cancelSettler();
+      cancelRecovery();
       cancelSettlementLookup();
       rateLimiter.stop();
       await registryCatalog.close?.();

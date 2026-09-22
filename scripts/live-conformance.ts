@@ -13,6 +13,9 @@ const chatModel = process.env['OPENAI_CHAT_MODEL'] ?? 'default';
 const transcriptionModel = process.env['OPENAI_TRANSCRIPTION_MODEL'] ?? 'default';
 const settlementTimeoutMs = positiveIntEnv('LIVE_SETTLEMENT_TIMEOUT_MS', 90_000);
 
+const selectedTransports = (process.env['LIVE_CONFORMANCE_TRANSPORTS'] ?? 'unary,stream,multipart').split(',');
+if (!selectedTransports.length || selectedTransports.some(t => !['unary','stream','multipart'].includes(t))) fail('invalid LIVE_CONFORMANCE_TRANSPORTS');
+
 interface UsageRow {
   id: string;
   capability: string;
@@ -56,14 +59,19 @@ async function main(): Promise<void> {
   const cookie = await portalLogin();
   const before = new Set((await listUsage(cookie)).map((row) => row.id));
 
+  if (selectedTransports.includes('unary')) {
   await runUnary();
   const unary = await waitForSettled(cookie, before, 'openai:chat-completions', 'unary');
   before.add(unary.id);
+  }
 
+  if (selectedTransports.includes('stream')) {
   await runStream();
   const stream = await waitForSettled(cookie, before, 'openai:chat-completions', 'stream');
   before.add(stream.id);
+  }
 
+  if (selectedTransports.includes('multipart')) {
   await runMultipart();
   const multipart = await waitForSettled(
     cookie,
@@ -72,12 +80,14 @@ async function main(): Promise<void> {
     'multipart',
   );
   before.add(multipart.id);
+  }
 
   const finalHealth = record(await getJson(`${baseUrl}/health`), 'health');
   if (finalHealth['pendingSettlements'] !== 0) {
     fail(`gateway still reports ${String(finalHealth['pendingSettlements'])} pending settlements`);
   }
-  pass('all transports settled and gateway reports zero pending settlements');
+  pass(`selected transports (${selectedTransports.join(', ')}) settled; zero pending settlements`);
+  if (selectedTransports.length < 3) console.log('Partial conformance only: omitted transports are NOT certified.');
 }
 
 async function portalLogin(): Promise<string> {

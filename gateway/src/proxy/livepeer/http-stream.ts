@@ -7,7 +7,8 @@ export interface SendOpts {
   brokerUrl: string;
   capability: string;
   offering: string;
-  paymentBlob: string;
+  authorization: string;
+  callerProof: string;
   body: string | Buffer | null;
   contentType?: string;
   requestId: string;
@@ -42,7 +43,8 @@ export function send(opts: SendOpts): Promise<SendResult> {
   const requestHeaders: Record<string, string> = {
     [HEADER.CAPABILITY]: opts.capability,
     [HEADER.OFFERING]: opts.offering,
-    [HEADER.PAYMENT]: opts.paymentBlob,
+    [HEADER.AUTHORIZATION]: opts.authorization,
+    [HEADER.CALLER_PROOF]: opts.callerProof,
     [HEADER.PROTOCOL]: PAID_JOB_PROTOCOL,
     [HEADER.REQUEST_ID]: opts.requestId,
     Accept: "text/event-stream",
@@ -119,7 +121,8 @@ export function sendStreaming(opts: SendOpts): Promise<StreamHandle> {
   const requestHeaders: Record<string, string> = {
     [HEADER.CAPABILITY]: opts.capability,
     [HEADER.OFFERING]: opts.offering,
-    [HEADER.PAYMENT]: opts.paymentBlob,
+    [HEADER.AUTHORIZATION]: opts.authorization,
+    [HEADER.CALLER_PROOF]: opts.callerProof,
     [HEADER.PROTOCOL]: PAID_JOB_PROTOCOL,
     [HEADER.REQUEST_ID]: opts.requestId,
     Accept: "text/event-stream",

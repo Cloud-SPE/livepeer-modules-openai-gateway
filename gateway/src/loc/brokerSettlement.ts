@@ -38,6 +38,10 @@ export async function lookupBrokerSettlement(
   const outcome = optionalText(body['outcome']);
   const state = optionalText(body['state']);
 
+  if (outcome === 'ADMISSION_REJECTED') {
+    return { kind: 'deferred', state: 'no_record', detail: 'admission refused; awaiting LOC fenced non-admission recovery' };
+  }
+
   if (response.status === 202) {
     const accountingPending =
       outcome === 'ACCOUNTING_PENDING' || state === 'accounting_pending';
@@ -141,8 +145,8 @@ export function decodeSignedSettlement(
     brokerJobId: requireText(payload['job_id'], 'payload.job_id'),
     paymentWorkId: requireText(payload['work_id'], 'payload.work_id'),
     workUnit: requireText(payload['work_unit_name'], 'payload.work_unit_name'),
-    actualUnits: requireUnsignedInteger(payload['actual_units'], 'payload.actual_units'),
-    debitedUnits: requireUnsignedInteger(payload['debited_units'], 'payload.debited_units'),
+    actualUnits: requireUnsignedInteger(payload['actual_units'] === undefined ? '0' : payload['actual_units'], 'payload.actual_units'),
+    debitedUnits: requireUnsignedInteger(payload['debited_units'] === undefined ? '0' : payload['debited_units'], 'payload.debited_units'),
     billedValueWei: decodeBigUInt(payload['billed_value_wei'], 'payload.billed_value_wei'),
     outcome: requireText(payload['outcome'], 'payload.outcome'),
   };
@@ -150,7 +154,9 @@ export function decodeSignedSettlement(
 
 function decodeBigUInt(value: unknown, field: string): string {
   const object = requireObject(value, field);
-  const bytes = requireText(object['value'], `${field}.value`);
+  // ProtoJSON omits default empty bytes inside a present BigUInt message.
+  const bytes = object['value'] === undefined ? '' : object['value'];
+  if (typeof bytes !== 'string') throw new BrokerSettlementContractError(`invalid ${field}.value`);
   const decoded = Buffer.from(bytes, 'base64');
   if (normalizeBase64(decoded.toString('base64')) !== normalizeBase64(bytes)) {
     throw new BrokerSettlementContractError(`invalid ${field}.value`);

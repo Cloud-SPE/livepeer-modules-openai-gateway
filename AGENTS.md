@@ -62,11 +62,11 @@ Top-level components — each has its own surface but no per-component
 - **Zero-build SPAs.** `web/` apps use Lit + `esm.sh` importmaps + a per-app
   `dev-server.js`. No Vite, no bundler. See [`FRONTEND.md`](./FRONTEND.md)
   for the DOM/CSS invariants.
-- **Gateway pays the network via the LOC.** Even though customers pay
-  nothing during beta, every `/v1/*` request opens a LOC job that mints
-  the `Livepeer-Payment` envelope and charges the operator's credit
-  balance the estimate; the gateway settles actual usage afterwards. The
-  gateway holds no chain keys. This is not optional.
+- **Gateway pays the network via the LOC.** Each inference request opens
+  a LOC job for a route-bound spend authorization and customer credit hold.
+  The gateway sends exact committed bytes with caller proof, then submits
+  signed broker evidence. LOC owns wholesale funding and chain keys; the
+  gateway's ephemeral invocation key is not a payment wallet.
 - **Models come from the LOC catalog.** No hardcoded model list, no
   rate cards. `/v1/models` reflects what the LOC capability catalog
   advertises; the model id is the LOC offering id.

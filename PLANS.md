@@ -8,7 +8,7 @@ plan under `docs/exec-plans/active/`; completed plans move to
 
 | Plan | Status |
 |---|---|
-| [`0007-paid-job-v1-migration`](./docs/exec-plans/active/0007-paid-job-v1-migration.md) | Phase 4 — gateway implementation and release tooling complete; final pinned-image conformance and cutover remain. |
+| [`0007-paid-job-v1-migration`](./docs/exec-plans/active/0007-paid-job-v1-migration.md) | Reopened implementation scope for protocol-4 wholesale authorizations, caller proof, and settlement-domain recovery. Beads epic `lmoa-3bv` tracks design, implementation, conformance, and cutover; August release evidence does not certify current upstreams. |
 
 ## Completed
 

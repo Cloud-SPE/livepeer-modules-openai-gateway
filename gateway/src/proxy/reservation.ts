@@ -124,6 +124,9 @@ export async function recordPaidJob(
   await usageRepo.recordPaidJobIdentity(deps.db, {
     workId: handle.workId,
     locIdempotencyKey: job.idempotencyKey,
+    spendAuthorization: job.spendAuthorization,
+    routeSnapshot: job.routeSnapshot,
+    accountingMode: job.accountingMode,
     locJobId: job.jobId,
     locRequestId: job.requestId,
     paymentWorkId: job.workId,
@@ -142,4 +145,10 @@ export async function recordPaidJob(
 
 function bytesToHex(bytes: Uint8Array): string | null {
   return bytes.length > 0 ? Buffer.from(bytes).toString('hex') : null;
+}
+
+export async function recordJobPrepared(deps: ServerDeps, handle: ReservationHandle,
+  request: import('../loc/client.js').OpenJobRequest): Promise<void> {
+  await usageRepo.recordOpenIntent(deps.db, handle.workId, request,
+    Math.max(300_000, (deps.config.locTimeoutMs + 2_000) * deps.config.locOpenMaxAttempts + 60_000));
 }

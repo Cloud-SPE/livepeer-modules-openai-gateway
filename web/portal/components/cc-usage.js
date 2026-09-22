@@ -108,6 +108,8 @@ class CcUsage extends LitElement {
       brokerOutcome: row.brokerSettlementOutcome ?? '—',
       locSettled: row.locSettledUnits ?? '—',
       locOutcome: row.locSettlementOutcome ?? '—',
+      locAccounting: row.locAccountingOutcome ?? '—',
+      settlementDomain: row.settlementDomainId ?? '—',
       settleState: row.settleState ?? '—',
       terminalEvidence: row.terminalEvidenceType ?? '—',
     };
@@ -144,7 +146,7 @@ class CcUsage extends LitElement {
             <div><span class="msg">protocol / transport</span><code>${route.protocol} / ${route.transport}</code></div>
             <div><span class="msg">LOC job</span><code>${route.locJobId}</code></div>
             <div><span class="msg">request ID</span><code>${route.requestId}</code></div>
-            <div><span class="msg">payment work ID</span><code>${route.paymentWorkId}</code></div>
+            <div><span class="msg">authorization / legacy work ID</span><code>${route.paymentWorkId}</code></div>
             <div><span class="msg">broker job</span><code>${route.brokerJobId}</code></div>
             <div><span class="msg">lookup</span><code>${route.lookupState} (${route.lookupAttempts})</code></div>
             ${route.lookupError !== '—' ? html`<div><span class="msg">lookup error</span><code>${route.lookupError}</code></div>` : ''}
@@ -153,6 +155,8 @@ class CcUsage extends LitElement {
             <div><span class="msg">broker outcome</span><code>${route.brokerOutcome}</code></div>
             <div><span class="msg">LOC settled</span><code>${route.locSettled} (${route.locOutcome})</code></div>
             <div><span class="msg">settlement</span><code>${route.settleState}</code></div>
+            <div><span class="msg">LOC accounting</span><code>${route.locAccounting}</code></div>
+            <div><span class="msg">settlement domain</span><code>${route.settlementDomain}</code></div>
             <div><span class="msg">terminal evidence</span><code>${route.terminalEvidence}</code></div>
           </div>
         </div>

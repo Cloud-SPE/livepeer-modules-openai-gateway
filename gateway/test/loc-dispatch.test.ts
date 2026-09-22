@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { routeSnapshot } from './wholesale-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
@@ -14,6 +16,7 @@ import { LivepeerBrokerError } from '../src/proxy/livepeer/errors.js';
 
 interface BrokerRequest {
   url: string;
+  body: Buffer;
   headers: Record<string, string | string[] | undefined>;
 }
 
@@ -24,9 +27,12 @@ async function withMockBroker(
 ): Promise<void> {
   const requests: BrokerRequest[] = [];
   const server: Server = createServer((req, res) => {
-    requests.push({ url: req.url ?? '', headers: req.headers });
-    req.resume();
+    const recorded = { url: req.url ?? '', headers: req.headers, body: Buffer.alloc(0) };
+    requests.push(recorded);
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
+      recorded.body = Buffer.concat(chunks);
       const code = typeof status === 'function' ? status(requests.length) : status;
       res.writeHead(code, {
         'Content-Type': 'application/json',
@@ -58,6 +64,7 @@ function fakeLoc(
 ): { loc: LocClient; calls: FakeLocCalls } {
   const calls: FakeLocCalls = { opens: 0, openRequests: [], settles: [] };
   const loc: LocClient = {
+    async getJob() { throw new Error('unused'); },
     async openJob(req) {
       calls.opens += 1;
       calls.openRequests.push(req);
@@ -114,7 +121,9 @@ function job(
     protocol: 'paid-job/v1',
     transport,
     workUnit: 'tokens',
-    paymentEnvelope: `envelope-${n}`,
+    spendAuthorization: Buffer.from(`authorization-${n}`).toString('base64'),
+    accountingMode: 'wholesale_account',
+    routeSnapshot: routeSnapshot(brokerUrl),
     expectedValueWei: '100',
     fundedValueWei: '100',
     settleEndpoint: `/v1/jobs/job-${n}/settle`,
@@ -137,6 +146,8 @@ test('multipart uses the same paid-job endpoint and preserves the upload content
     });
     assert.deepEqual(calls.openRequests, [{
       idempotencyKey: 'multipart-operation',
+      workloadRequestDigest: createHash('sha256').update('--boundary--\r\n').digest('hex'),
+      callerPublicKey: calls.openRequests[0]!.callerPublicKey,
       capability: 'openai:audio-transcriptions',
       offering: 'whisper',
       transport: 'multipart',
@@ -149,12 +160,13 @@ test('multipart uses the same paid-job endpoint and preserves the upload content
       'multipart/form-data; boundary=boundary',
     );
     assert.equal(brokerRequests[0]!.headers['livepeer-protocol'], 'paid-job/v1');
+    assert.equal(createHash('sha256').update(brokerRequests[0]!.body).digest('hex'), calls.openRequests[0]!.workloadRequestDigest);
     assert.equal(out.jobRef.transport, 'multipart');
     assert.equal(out.jobRef.brokerJobId, 'broker-job-1');
   });
 });
 
-test('success: opens one job, sends payment envelope to broker, returns jobRef', async () => {
+test('success: opens one job, sends authorization and caller proof to broker, returns jobRef', async () => {
   await withMockBroker(200, async (brokerUrl, brokerRequests) => {
     const { loc, calls } = fakeLoc(() => job(brokerUrl, 1));
     const out = await dispatchReqresp({
@@ -170,6 +182,9 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
     assert.equal(calls.settles.length, 0);
     assert.deepEqual(out.jobRef, {
       idempotencyKey: 'req-1',
+      spendAuthorization: Buffer.from('authorization-1').toString('base64'),
+      accountingMode: 'wholesale_account',
+      routeSnapshot: routeSnapshot(brokerUrl),
       jobId: 'job-1',
       brokerJobId: 'broker-job-1',
       requestId: 'broker-request-1',
@@ -186,7 +201,9 @@ test('success: opens one job, sends payment envelope to broker, returns jobRef',
     assert.equal(out.candidate.model, 'llama-3');
     assert.equal(brokerRequests.length, 1);
     assert.equal(brokerRequests[0]!.url, '/v1/job');
-    assert.equal(brokerRequests[0]!.headers['livepeer-payment'], 'envelope-1');
+    assert.equal(brokerRequests[0]!.headers['livepeer-payment'], undefined);
+    assert.equal(brokerRequests[0]!.headers['livepeer-authorization'], Buffer.from('authorization-1').toString('base64'));
+    assert.ok(brokerRequests[0]!.headers['livepeer-caller-proof']);
     assert.equal(brokerRequests[0]!.headers['livepeer-protocol'], 'paid-job/v1');
     assert.equal(brokerRequests[0]!.headers['livepeer-request-id'], 'broker-request-1');
     assert.equal(brokerRequests[0]!.headers['livepeer-mode'], undefined);
@@ -454,9 +471,9 @@ test('LOC 5xx: retried up to maxJobAttempts', async () => {
   );
   assert.equal(calls.opens, 3);
   assert.deepEqual(calls.openRequests, [
-    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
-    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
-    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 },
+    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1, workloadRequestDigest: createHash('sha256').update('').digest('hex'), callerPublicKey: calls.openRequests[0]!.callerPublicKey },
+    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1, workloadRequestDigest: createHash('sha256').update('').digest('hex'), callerPublicKey: calls.openRequests[0]!.callerPublicKey },
+    { idempotencyKey: 'r', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1, workloadRequestDigest: createHash('sha256').update('').digest('hex'), callerPublicKey: calls.openRequests[0]!.callerPublicKey },
   ]);
 });
 
@@ -506,4 +523,19 @@ test('LOC in-progress replay is retried identically and may converge', async () 
   assert.equal(calls.opens, 3);
   assert.equal(new Set(calls.openRequests.map((request) => JSON.stringify(request))).size, 1);
   assert.equal(calls.openRequests[0]!.idempotencyKey, 'stable-in-flight-operation');
+});
+
+
+test('FormData is serialized once before durable open intent and broker dispatch', async()=>{
+  await withMockBroker(200,async(brokerUrl,requests)=>{
+    let prepared=false;
+    const {loc,calls}=fakeLoc(()=>{assert.ok(prepared);return job(brokerUrl,1,'multipart');});
+    const body=new FormData();body.append('model','runner');body.append('file',new Blob(['exact-bytes']),'test.wav');
+    await dispatchMultipart({loc,capability:'c',offering:'o',estimatedUnits:1,idempotencyKey:'multipart',body,
+      onJobPrepared:async()=>{prepared=true;}});
+    assert.equal(calls.openRequests[0]!.workloadRequestDigest,createHash('sha256').update(requests[0]!.body).digest('hex'));
+    assert.match(String(requests[0]!.headers['content-type']),/boundary=/);
+    assert.equal(requests[0]!.headers['livepeer-payment'],undefined);
+    assert.ok(requests[0]!.headers['livepeer-caller-proof']);
+  });
 });

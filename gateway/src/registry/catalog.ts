@@ -97,7 +97,7 @@ export function flattenCapabilities(capabilities: LocCapability[]): RouteCandida
         pricePerWorkUnitWei: offering.pricePerWorkUnitWei ?? '0',
         workUnit: offering.workUnit ?? capability.workUnit ?? '',
         ...(offering.estimator ? { estimator: { ...offering.estimator } } : {}),
-        unitsPerPrice: 1,
+        unitsPerPrice: offering.unitsPerPrice,
         quoteId: '',
         quoteVersion: 0,
         constraintFingerprint: new Uint8Array(),

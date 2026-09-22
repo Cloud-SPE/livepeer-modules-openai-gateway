@@ -82,7 +82,7 @@ live-conformance:
 
 loc-smoke:
 	@credential=../livepeer-modules-open-clearinghouse/.dev/pilot/credentials/openai.json; \
-	if [ -f "$$credential" ]; then \
+	if [ -z "$$LOC_API_KEY" ] && [ -f "$$credential" ]; then \
 		export LOC_BASE_URL=http://127.0.0.1:8088; \
 		export LOC_API_KEY=$$(jq -er '.api_key' "$$credential"); \
 	fi; \

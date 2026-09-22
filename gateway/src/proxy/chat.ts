@@ -19,6 +19,7 @@ import {
   commitReservation,
   openReservation,
   recordPaidJob,
+  recordJobPrepared,
   recordSelectedRoute,
   failReservation,
   type ReservationHandle,
@@ -103,6 +104,7 @@ export async function registerChatRoute(
           body: bodyStr,
           contentType: 'application/json',
           idempotencyKey: handle.workId,
+          onJobPrepared: (request) => recordJobPrepared(deps, handle, request),
           onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
@@ -156,6 +158,7 @@ async function runStreaming(
       body: input.bodyStr,
       contentType: 'application/json',
       idempotencyKey: input.handle.workId,
+      onJobPrepared: (request) => recordJobPrepared(deps, input.handle, request),
       onJobUpdate: (job, candidate) => recordPaidJob(deps, input.handle, job, candidate),
     });
   } catch (err) {

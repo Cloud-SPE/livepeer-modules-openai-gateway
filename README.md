@@ -13,7 +13,7 @@ This repository is both:
 
 The core idea is simple: keep the OpenAI client surface familiar, but
 route work through Livepeer's capability marketplace. The LOC owns route
-selection and payment minting; the gateway opens a job per request and
+selection and wholesale funding and authorization; the gateway opens a job per request and
 forwards it to the broker the LOC picks.
 
 Agents should start at [AGENTS.md](./AGENTS.md). Humans can use this
@@ -35,7 +35,7 @@ This repo contains:
   health, and registry diagnostics
 
 This repo holds no chain keys and never talks to the chain directly. It
-delegates route selection and payment minting to the **LOC — Livepeer
+delegates route selection and wholesale funding and authorization to the **LOC — Livepeer
 Open Clearinghouse** (the sibling localhost service during development), reached
 over HTTPS with an `X-API-Key` header.
 
@@ -44,8 +44,8 @@ over HTTPS with an `X-API-Key` header.
 This project demonstrates a practical application architecture for the
 Livepeer network:
 - discover capabilities from the LOC clearinghouse
-- open a job per request — the LOC selects a route AND mints the
-  payment envelope in one call
+- open a job per request — the LOC selects a route and issues the
+  spend authorization in one call
 - forward OpenAI-shaped requests to the broker the LOC returns
 - retrieve broker-signed terminal evidence and settle it through LOC
 - preserve enough job / route metadata for auditing and debugging
@@ -105,8 +105,8 @@ flowchart LR
 flowchart TD
   A[Client request] --> B[Bearer or session auth]
   B --> C[Open reservation]
-  C --> D[Open LOC job: route + payment envelope]
-  D --> F[Dispatch to broker with Livepeer-Payment]
+  C --> D[Open LOC job: route + spend authorization]
+  D --> F[Dispatch to broker with Livepeer-Authorization]
   F --> G[Capability worker executes]
   G --> H[Gateway returns response]
   H --> I[Record request outcome]
@@ -128,7 +128,7 @@ sequenceDiagram
   C->>G: POST /v1/*
   G->>DB: validate key + open usage_reservations row
   G->>L: POST /v1/jobs<br/>Idempotency-Key + transport + ceiling
-  L-->>G: {job_id, request_id, work_id, protocol,<br/>transport, work_unit, broker_url, payment_envelope}
+  L-->>G: {job_id, request_id, work_id, protocol,<br/>transport, work_unit, broker_url, spend_authorization}
   G->>B: POST /v1/job<br/>protocol + request ID + payment
   B-->>G: response or stream
   G->>DB: record response outcome and broker job ID
@@ -223,8 +223,8 @@ The gateway is the center of the system. It:
 - exposes OpenAI-compatible endpoints
 - validates API keys and portal/admin credentials
 - opens, commits, and refunds usage reservations
-- opens a LOC job per request (the LOC selects the route AND mints the
-  payment envelope)
+- opens a LOC job per request (the LOC selects the route and issues the
+  spend authorization)
 - forwards requests to the broker the LOC returns
 - settles actual usage back to the LOC via a durable background task
 - stores a cached public model catalog in Postgres
@@ -243,7 +243,7 @@ The three `web/` apps are zero-build Lit SPAs:
 There are two distinct paths:
 - hot-path routing:
   request-time `POST /v1/jobs` to the LOC, which returns a single
-  route plus its payment envelope
+  route plus its spend authorization
 - catalog/debug path:
   background refresh from the LOC `GET /v1/capabilities` into the
   `models` table for `/v1/models` and diagnostics
@@ -506,7 +506,7 @@ value:
   - offering
   - model id
   - LOC job / work id
-  - payment envelope
+  - spend authorization
   - signed settlement evidence
 - a troubleshooting page for local development:
   - LOC API key / reachability

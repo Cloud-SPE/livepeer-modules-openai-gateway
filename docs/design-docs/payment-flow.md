@@ -1,19 +1,19 @@
 # Paid-job payment flow
 
 Every proxied inference request is funded through LOC and executed with
-`paid-job/v1`. The gateway holds no chain keys and treats the LOC payment
-envelope as opaque.
+`paid-job/v1`. The gateway holds no chain keys and treats the LOC spend
+authorization as opaque.
 
 ## Lifecycle
 
 1. The gateway creates its own operation UUID and durably opens a reservation.
 2. It asks LOC to open a job with that UUID as `Idempotency-Key`, including the
-   capability, offering, transport, estimate, and funded ceiling.
+   capability, offering, transport, estimate, and authorization ceiling, plus exact request digest and caller public key.
 3. It persists the gateway operation ID, LOC idempotency key, LOC job ID, LOC
-   request ID, and payment `work_id` before contacting the broker.
+   request ID, and authorization `work_id` before contacting the broker.
 4. It sends the original workload to broker `POST /v1/job` with
    `Livepeer-Protocol: paid-job/v1`, the LOC-issued request ID, and the opaque
-   payment envelope.
+   spend authorization and caller proof.
 5. It persists `Livepeer-Job-Id` when admission is observed and returns or
    streams the broker response without scraping it for accounting.
 6. A background lookup retrieves the signed terminal claim by broker job ID,
@@ -46,7 +46,7 @@ missing or unknown metadata fails before the reservation or paid job is opened.
 - Broker requests are not automatically resubmitted.
 - An accounting-only replay becomes `upstream_response_lost`; accounting
   recovery continues for the original job.
-- `ACCOUNTING_PENDING` and `IN_FLIGHT` remain retryable lookup states.
+- `ACCOUNTING_PENDING`, `IN_FLIGHT`, `NO_RECORD` and `ADMISSION_REJECTED` remain retryable lookup states. LOC requests fenced non-admission evidence.
 - `NOT_ADMITTED` is retained as audit evidence, never converted to usage.
 - `DEBIT_FAILED` is a signed explicit failure, not successful settlement.
 - LOC `409 job_already_settled` is terminal financial success after a lost
@@ -63,3 +63,7 @@ real value and must run against deliberately configured spend limits.
 Relevant code: `gateway/src/loc/dispatch.ts`,
 `gateway/src/loc/brokerSettlement.ts`, `gateway/src/loc/settlementLookup.ts`,
 `gateway/src/loc/settler.ts`, and `gateway/src/repo/usageReservations.ts`.
+
+Stale LOC opens and LOC status are reconciled by `loc/recovery.ts`. See the
+[current contract](./paid-job-v1.md) for exact-byte commitments, ephemeral
+caller keys, settlement-domain binding and accounting-only restart recovery.

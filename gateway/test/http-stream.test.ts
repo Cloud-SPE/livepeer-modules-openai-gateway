@@ -25,7 +25,7 @@ test('stream handle arrives before completion and needs no terminal trailer', as
       brokerUrl: `http://127.0.0.1:${port}`,
       capability: 'openai:chat-completions',
       offering: 'model',
-      paymentBlob: 'payment',
+      authorization: 'authorization', callerProof: 'proof',
       body: '{}',
       contentType: 'application/json',
       requestId: 'request-1',

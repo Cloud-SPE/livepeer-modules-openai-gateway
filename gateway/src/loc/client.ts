@@ -1,10 +1,6 @@
-// Typed HTTP client for the Livepeer Open Clearinghouse (LOC).
-//
-// The LOC fronts the service-registry and payer daemons: POST /v1/jobs
-// selects a route AND mints the payment envelope in one call; the
-// envelope goes verbatim into the `Livepeer-Payment` header. The envelope
-// funds a bounded exchange; only signed broker evidence authorizes final
-// LOC accounting (see settler.ts).
+// LOC owns wholesale funding, route selection and spend authorization.
+// Exact request commitments bind each invocation; only signed broker evidence
+// authorizes settlement. Status observations remain a separate authority.
 
 export interface LocClientConfig {
   baseUrl: string;
@@ -35,6 +31,8 @@ export interface OpenJobRequest {
   transport: JobTransport;
   estimatedUnits: number;
   maxTotalUnits?: number;
+  workloadRequestDigest: string;
+  callerPublicKey: string;
 }
 
 export interface OpenJobResponse {
@@ -45,12 +43,41 @@ export interface OpenJobResponse {
   protocol: 'paid-job/v1';
   transport: JobTransport;
   workUnit: string;
-  /** Base64 payment bytes — goes verbatim into the Livepeer-Payment header. */
-  paymentEnvelope: string;
+  spendAuthorization: string;
+  accountingMode: 'wholesale_account';
+  routeSnapshot: RouteSnapshot;
   expectedValueWei: string;
   fundedValueWei: string;
   settleEndpoint: string;
   openedAt: string;
+}
+
+export interface RouteSnapshot extends Record<string, unknown> {
+  broker_url: string;
+  eth_address: string;
+  capability: string;
+  offering: string;
+  protocol: 'paid-job/v1';
+  work_unit: string;
+  price_per_work_unit_wei: string;
+  units_per_price: number;
+  quote_id: string;
+  quote_version: number;
+  constraint_fingerprint: string;
+  route_fingerprint: string;
+  settlement_domain_id: string;
+  settlement_keys: unknown[];
+}
+
+export interface JobStatus {
+  jobId: string;
+  requestId: string;
+  workId: string;
+  state: string;
+  accountingOutcome: 'unresolved' | 'non_admission_audit' | 'broker_settled' | 'conservative_full_charge';
+  actualUnits: string | null;
+  billedValueWei: string | null;
+  closedAt: string | null;
 }
 
 export interface SettleJobRequest {
@@ -95,6 +122,7 @@ export interface SettleJobResponse {
 export interface LocOffering {
   id: string;
   pricePerWorkUnitWei: string | null;
+  unitsPerPrice: number;
   workUnit: string | null;
   estimator?: LocWorkUnitEstimator;
   protocol: string;
@@ -139,6 +167,7 @@ export interface LocHealth {
 
 export interface LocClient {
   openJob(req: OpenJobRequest): Promise<OpenJobResponse>;
+  getJob(jobId: string): Promise<JobStatus>;
   settleJob(settleEndpoint: string, jobId: string, req: SettleJobRequest): Promise<SettleJobResponse>;
   listCapabilities(): Promise<LocCapability[]>;
   listOrchestrators(capability?: string): Promise<LocOrchestrator[]>;
@@ -163,6 +192,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
     try {
       resp = await fetch(new URL(path, cfg.baseUrl), {
         method,
+        redirect: 'error',
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(cfg.timeoutMs),
@@ -199,6 +229,8 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
           offering: req.offering,
           transport: req.transport,
           estimated_units: estimatedUnits,
+          workload_request_digest: requirePattern(req.workloadRequestDigest, /^[0-9a-f]{64}$/, 'workload_request_digest'),
+          caller_public_key: requirePattern(req.callerPublicKey, /^(02|03)[0-9a-f]{64}$/, 'caller_public_key'),
           ...(maxTotalUnits !== undefined ? { max_total_units: maxTotalUnits } : {}),
         }, { 'Idempotency-Key': requireText(req.idempotencyKey, 'idempotency key') }),
       );
@@ -216,6 +248,12 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         'settle_endpoint',
         cfg.baseUrl,
       );
+      if (raw['accounting_mode'] !== 'wholesale_account') throw invalidContract('unsupported accounting_mode');
+      const routeSnapshot = parseRouteSnapshot(raw['route_snapshot']);
+      if (routeSnapshot.broker_url !== brokerUrl || routeSnapshot.capability !== req.capability ||
+          routeSnapshot.offering !== req.offering || routeSnapshot.work_unit !== raw['work_unit']) {
+        throw invalidContract('route snapshot does not match job');
+      }
       return {
         jobId: requireText(raw['job_id'], 'job_id'),
         requestId: requireText(raw['request_id'], 'request_id'),
@@ -224,11 +262,30 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         protocol,
         transport,
         workUnit: requireText(raw['work_unit'], 'work_unit'),
-        paymentEnvelope: requireText(raw['payment_envelope'], 'payment_envelope'),
+        spendAuthorization: requireText(raw['spend_authorization'], 'spend_authorization'),
+        accountingMode: 'wholesale_account',
+        routeSnapshot,
         expectedValueWei: requireUnsignedIntegerText(raw['expected_value_wei'], 'expected_value_wei'),
         fundedValueWei: requireUnsignedIntegerText(raw['funded_value_wei'], 'funded_value_wei'),
         settleEndpoint,
         openedAt: requireTimestamp(raw['opened_at'], 'opened_at'),
+      };
+    },
+
+    async getJob(jobId: string): Promise<JobStatus> {
+      const raw = asRecord(await call('GET', `/v1/jobs/${encodeURIComponent(jobId)}`));
+      if (raw['job_id'] !== jobId) throw invalidContract('LOC job status identity drift');
+      const outcome = requireText(raw['accounting_outcome'], 'accounting_outcome');
+      if (!['unresolved', 'non_admission_audit', 'broker_settled', 'conservative_full_charge'].includes(outcome)) {
+        throw invalidContract('unsupported LOC accounting outcome');
+      }
+      return {
+        jobId, requestId: requireText(raw['request_id'], 'request_id'),
+        workId: requireText(raw['work_id'], 'work_id'), state: requireText(raw['state'], 'state'),
+        accountingOutcome: outcome as JobStatus['accountingOutcome'],
+        actualUnits: raw['actual_units'] == null ? null : requireUnsignedIntegerText(raw['actual_units'], 'actual_units'),
+        billedValueWei: raw['billed_value_wei'] == null ? null : requireUnsignedIntegerText(raw['billed_value_wei'], 'billed_value_wei'),
+        closedAt: raw['closed_at'] == null ? null : requireTimestamp(raw['closed_at'], 'closed_at'),
       };
     },
 
@@ -309,6 +366,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
             return {
               id: str(off['id']),
               pricePerWorkUnitWei: strOrNull(off['price_per_work_unit_wei']),
+              unitsPerPrice: requirePositiveSafeInteger(Number(requireUnsignedIntegerText(off['units_per_price'], 'units_per_price')), 'units_per_price'),
               workUnit: strOrNull(off['work_unit']),
               ...(estimator ? { estimator } : {}),
               protocol: str(off['protocol']),
@@ -330,7 +388,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
           ethAddress: str(orch['eth_address']),
           workerUrl: str(orch['worker_url']),
           capabilities: Array.isArray(orch['capabilities'])
-            ? orch['capabilities'].map((c) => String(c))
+            ? orch['capabilities'].map((c) => typeof c === 'string' ? c : str(asRecord(c)['name']))
             : [],
           signatureStatus: str(orch['signature_status']),
           freshnessStatus: str(orch['freshness_status']),
@@ -339,8 +397,8 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
     },
 
     async getBalance(): Promise<LocBalance> {
-      const raw = asRecord(await call('GET', '/v1/accounts/me/balance'));
-      return { amountWei: str(raw['amount_wei']) };
+      const raw = asRecord(await call('GET', '/v1/accounts/me/usage/overview'));
+      return { amountWei: requireUnsignedIntegerText(raw['available_wei'], 'available_wei') };
     },
 
     async health(): Promise<LocHealth> {
@@ -461,7 +519,7 @@ function assertSettlementRequestMatches(
   payload: Record<string, unknown>,
   request: { actualUnits: number; brokerJobId: string; workUnit: string; outcome?: string },
 ): void {
-  const payloadActual = requireUnsignedIntegerText(payload['actual_units'], 'settlement.payload.actual_units');
+  const payloadActual = requireUnsignedIntegerText(payload['actual_units'] === undefined ? '0' : payload['actual_units'], 'settlement.payload.actual_units');
   if (payloadActual !== String(request.actualUnits)) {
     throw invalidContract(
       `actual unit drift: request ${request.actualUnits}, settlement ${payloadActual}`,
@@ -620,4 +678,33 @@ function str(value: unknown): string {
 function strOrNull(value: unknown): string | null {
   const s = str(value);
   return s.length > 0 ? s : null;
+}
+
+function requirePattern(value: unknown, pattern: RegExp, field: string): string {
+  const text = requireText(value, field);
+  if (!pattern.test(text)) throw invalidContract(`invalid ${field}`);
+  return text;
+}
+
+function parseRouteSnapshot(value: unknown): RouteSnapshot {
+  const r = asRecord(value);
+  if (r['schema_version'] !== 'route-snapshot/v1' || r['protocol'] !== 'paid-job/v1') {
+    throw invalidContract('unsupported route snapshot');
+  }
+  const domain = requirePattern(r['settlement_domain_id'], /^0x[0-9a-f]{64}$/, 'settlement_domain_id');
+  if (BigInt(domain) === 0n) throw invalidContract('zero settlement domain');
+  if (!Array.isArray(r['settlement_keys']) || r['settlement_keys'].length === 0) throw invalidContract('missing settlement keys');
+  return {
+    ...r, broker_url: requireUrl(r['broker_url'], 'route broker_url'),
+    eth_address: requirePattern(r['eth_address'], /^0x[0-9a-fA-F]{40}$/, 'eth_address'),
+    capability: requireText(r['capability'], 'capability'), offering: requireText(r['offering'], 'offering'),
+    protocol: 'paid-job/v1', work_unit: requireText(r['work_unit'], 'work_unit'),
+    price_per_work_unit_wei: requireUnsignedIntegerText(r['price_per_work_unit_wei'], 'price'),
+    units_per_price: requirePositiveSafeInteger(Number(requireUnsignedIntegerText(r['units_per_price'], 'units_per_price')), 'units_per_price'),
+    quote_id: requireText(r['quote_id'], 'quote_id'),
+    quote_version: requirePositiveSafeInteger(Number(requireUnsignedIntegerText(r['quote_version'], 'quote_version')), 'quote_version'),
+    constraint_fingerprint: requirePattern(r['constraint_fingerprint'], /^[0-9a-f]{64}$/, 'constraint_fingerprint'),
+    route_fingerprint: requirePattern(r['route_fingerprint'], /^[0-9a-f]{64}$/, 'route_fingerprint'),
+    settlement_domain_id: domain, settlement_keys: r['settlement_keys'],
+  };
 }

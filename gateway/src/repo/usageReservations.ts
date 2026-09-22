@@ -1,3 +1,4 @@
+import type { OpenJobRequest, OpenJobResponse, JobStatus, RouteSnapshot } from '../loc/client.js';
 import { and, desc, eq, gt, sql } from 'drizzle-orm';
 
 import type { Db } from '../db.js';
@@ -95,6 +96,9 @@ export interface PaidJobIdentityInput {
   selectedOffering: string;
   unitsPerPrice: number | null;
   pricePerWorkUnitWei: string | null;
+  spendAuthorization: string;
+  routeSnapshot: RouteSnapshot;
+  accountingMode: 'wholesale_account';
 }
 
 /** Persist every paid-job identity before asynchronous recovery starts. */
@@ -107,6 +111,18 @@ export async function recordPaidJobIdentity(
     .set({
       locIdempotencyKey: input.locIdempotencyKey,
       locJobId: input.locJobId,
+      locOpenRecoveryState: 'recovered',
+      locOpenNextAt: null,
+      spendAuthorization: input.spendAuthorization,
+      routeSnapshot: input.routeSnapshot,
+      settlementDomainId: input.routeSnapshot.settlement_domain_id,
+      accountingMode: input.accountingMode,
+      ethAddress: input.routeSnapshot.eth_address,
+      quoteId: input.routeSnapshot.quote_id,
+      quoteVersion: String(input.routeSnapshot.quote_version),
+      constraintFingerprintHex: input.routeSnapshot.constraint_fingerprint,
+      routeFingerprintHex: input.routeSnapshot.route_fingerprint,
+      locStatusNextAt: new Date(),
       locRequestId: input.locRequestId,
       paymentWorkId: input.paymentWorkId,
       brokerJobId: input.brokerJobId,
@@ -124,9 +140,14 @@ export async function recordPaidJobIdentity(
       settlementLookupUpdatedAt: new Date(),
       settlementLookupLastError: null,
     })
-    .where(eq(usageReservations.workId, input.workId))
+    .where(and(eq(usageReservations.workId, input.workId),
+      sql`(${usageReservations.locJobId} IS NULL OR ${usageReservations.locJobId} = ${input.locJobId})`,
+      sql`(${usageReservations.locRequestId} IS NULL OR ${usageReservations.locRequestId} = ${input.locRequestId})`,
+      sql`(${usageReservations.paymentWorkId} IS NULL OR ${usageReservations.paymentWorkId} = ${input.paymentWorkId})`,
+      sql`(${usageReservations.settlementDomainId} IS NULL OR ${usageReservations.settlementDomainId} = ${input.routeSnapshot.settlement_domain_id})`,
+    ))
     .returning({ id: usageReservations.id });
-  if (!row) throw new Error(`reservation ${input.workId} not found`);
+  if (!row) throw new Error(`reservation ${input.workId} not found or paid-job identity drift`);
 }
 
 export type SettlementLookupState =
@@ -159,7 +180,7 @@ export async function claimPendingSettlementLookups(
     SELECT id, broker_url, broker_job_id, loc_request_id, payment_work_id,
            selected_work_unit, settlement_lookup_attempts
     FROM usage_reservations
-    WHERE settlement_lookup_state IN ('pending', 'accounting_pending', 'in_flight')
+    WHERE settlement_lookup_state IN ('pending', 'accounting_pending', 'in_flight', 'no_record')
       AND settlement_lookup_next_at <= now()
       AND broker_url IS NOT NULL
       AND loc_request_id IS NOT NULL
@@ -266,6 +287,7 @@ export async function recordSettlementEvidence(
         brokerJobId: usageReservations.brokerJobId,
         paymentWorkId: usageReservations.paymentWorkId,
         workUnit: usageReservations.selectedWorkUnit,
+        domain: usageReservations.settlementDomainId,
       })
       .from(usageReservations)
       .where(eq(usageReservations.id, id))
@@ -278,6 +300,11 @@ export async function recordSettlementEvidence(
       workUnit: row.workUnit ?? '<missing>',
     };
     const differences = validateSettlementEvidenceIdentity(expected, evidence);
+    if (row.domain) {
+      const payload = evidence.envelope['payload'] as Record<string, unknown> | undefined;
+      if (payload?.['settlement_domain_id'] !== row.domain) differences.push('settlement domain drift');
+      if (payload?.['authorization_id'] !== row.paymentWorkId) differences.push('authorization identity drift');
+    }
     if (differences.length > 0) {
       await tx
         .update(usageReservations)
@@ -661,4 +688,61 @@ function normalizeTimestamp(value: Date | string | null): Date | null {
   if (value instanceof Date) return value;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Persist public commitment before LOC can encumber credit. Never store customer body/private key. */
+export async function recordOpenIntent(db: Db, workId: string, request: OpenJobRequest, recoveryDelayMs = 300_000): Promise<void> {
+  await db.update(usageReservations).set({
+    locOpenRequest: request, locOpenRecoveryState: 'pending', locIdempotencyKey: request.idempotencyKey,
+    locOpenNextAt: new Date(Date.now() + recoveryDelayMs),
+  }).where(eq(usageReservations.workId, workId));
+}
+
+export async function pendingOpenIntents(db: Db, limit: number) {
+  return db.select({ id: usageReservations.id, workId: usageReservations.workId, request: usageReservations.locOpenRequest })
+    .from(usageReservations).where(sql`loc_open_recovery_state = 'pending' AND loc_job_id IS NULL AND loc_open_next_at <= now()`)
+    .limit(limit);
+}
+
+export async function deferOpenIntent(db: Db, id: string, refused: boolean): Promise<void> {
+  await db.update(usageReservations).set({ locOpenRecoveryState: refused ? 'refused' : 'pending',
+    locOpenNextAt: new Date(Date.now() + 60_000),
+  }).where(eq(usageReservations.id, id));
+}
+
+export async function recoverOpenIdentity(db: Db, workId: string, request: OpenJobRequest, job: OpenJobResponse): Promise<void> {
+  await recordPaidJobIdentity(db, {
+    workId, locIdempotencyKey: request.idempotencyKey, locJobId: job.jobId,
+    locRequestId: job.requestId, paymentWorkId: job.workId, brokerJobId: null,
+    protocol: job.protocol, transport: job.transport, workUnit: job.workUnit,
+    settleEndpoint: job.settleEndpoint, brokerUrl: job.brokerUrl,
+    selectedCapability: request.capability, selectedOffering: request.offering,
+    unitsPerPrice: job.routeSnapshot.units_per_price, pricePerWorkUnitWei: job.routeSnapshot.price_per_work_unit_wei,
+    spendAuthorization: job.spendAuthorization, routeSnapshot: job.routeSnapshot, accountingMode: job.accountingMode,
+  });
+}
+
+export async function pendingLocStatuses(db: Db, limit: number) {
+  return db.select({ id: usageReservations.id, jobId: usageReservations.locJobId,
+    requestId: usageReservations.locRequestId, workId: usageReservations.paymentWorkId,
+  }).from(usageReservations).where(sql`loc_job_id IS NOT NULL
+    AND loc_accounting_state IS DISTINCT FROM 'closed' AND (loc_status_next_at IS NULL OR loc_status_next_at <= now())`)
+    .limit(limit);
+}
+
+export async function recordLocStatus(db: Db, id: string, result: JobStatus): Promise<void> {
+  await db.update(usageReservations).set({
+    locAccountingState: result.state, locAccountingOutcome: result.accountingOutcome,
+    locStatusNextAt: new Date(Date.now() + 30_000), locStatusError: null,
+    ...(result.state === 'closed' ? {
+      settleState: 'settled', settledAt: result.closedAt ? new Date(result.closedAt) : new Date(),
+      locSettledUnits: result.actualUnits, locBilledValueWei: result.billedValueWei,
+      locSettlementOutcome: result.accountingOutcome,
+    } : {}),
+  }).where(eq(usageReservations.id, id));
+}
+
+export async function deferLocStatus(db: Db, id: string, error: string): Promise<void> {
+  await db.update(usageReservations).set({ locStatusNextAt: new Date(Date.now() + 60_000), locStatusError: error.slice(0,500) })
+    .where(eq(usageReservations.id, id));
 }

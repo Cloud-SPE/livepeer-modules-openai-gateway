@@ -14,7 +14,7 @@ This doc is for production.
 
 A single-host or single-pod deployment of just two services — the
 gateway and Postgres — with the gateway serving the checked-in site,
-portal, and admin SPAs itself. Route selection and payment minting are
+portal, and admin SPAs itself. Route selection and wholesale funding and authorization are
 delegated to the external **LOC — Livepeer Open Clearinghouse** over
 HTTPS:
 
@@ -98,19 +98,29 @@ the compose stack.
 ## LOC clearinghouse
 
 The gateway does **not** hold chain keys, mint tickets, or run any
-daemons. It delegates route selection and payment minting to the LOC
+daemons. It delegates route selection and wholesale funding and authorization to the LOC
 (Livepeer Open Clearinghouse). Per `/v1/*` request the gateway:
 
-1. opens a job (`POST /v1/jobs {capability, offering, estimated_units}`);
-   the LOC selects a route, mints the payment envelope, and encumbers the
-   funded ceiling;
-2. forwards the request to the returned `broker_url` with the
-   `payment_envelope` in the `Livepeer-Payment` header;
-3. retrieves the broker's signed terminal claim independently and submits
-   that exact evidence to `POST /v1/jobs/{id}/settle`.
+1. serializes the final request once, hashes its exact bytes, and generates
+   an ephemeral invocation-proof key;
+2. persists the public open intent, then opens a job with the digest, caller
+   public key, capability/offering, transport and bounded units;
+3. persists LOC's spend authorization and domain-bound route snapshot, then
+   sends `Livepeer-Authorization` and `Livepeer-Caller-Proof` to the broker;
+4. retrieves the exact signed terminal claim and submits it to LOC; independent
+   LOC-status recovery observes authoritative accounting after restart.
 
-Claim lookup and LOC settlement run in durable background tasks. Gateway
-response bodies and local estimates are never settlement evidence.
+Chain funding remains at LOC. The ephemeral caller key is not a chain key.
+Never log authorization bytes or caller proof. Migration 0010 preserves old
+rows and adds durable open intent, route/domain and LOC accounting state.
+A restart recovers accounting and never replays inference bytes.
+
+For an existing production LOC, set `LOC_BASE_URL=https://loc.cloudspe.com`
+and a valid `LOC_API_KEY` in the ignored `.env`, then run `make dev` to build
+and start this gateway plus its local database. No LOC sidecars are required.
+Catalog discovery does not guarantee route availability. Transcription needs
+the advertised exact estimator; missing metadata is a pre-payment 503.
+
 
 ### Config
 
@@ -477,7 +487,12 @@ Recommended starter alerts:
 
 ## Upgrades
 
-### Breaking v2.0.0 cutover
+### Historical August v2.0.0 cutover
+
+The August pins below are historical. Current protocol-4 deployment requires
+new compatible artifact pins and completion of Beads release gates; do not
+use the old tags/digests to certify this authorization migration.
+
 
 This is not a rolling dual-protocol upgrade. Do not run a v1 gateway beside a
 v2 gateway and do not send new work to the old broker contract after the
@@ -529,7 +544,7 @@ GATEWAY_IMAGE="$GATEWAY_IMAGE" docker compose \
 # 7. Watch for clean boot:
 docker compose logs -f gateway
 # Look for:
-#   migrations through 0009 applied
+#   migrations through 0010 applied
 #   Server listening at http://0.0.0.0:4001
 
 # 8. Confirm health and the LOC-backed catalog:

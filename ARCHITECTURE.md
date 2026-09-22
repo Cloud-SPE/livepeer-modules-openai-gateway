@@ -27,7 +27,7 @@ flowchart LR
 
   GW[gateway<br/>TS / Fastify] -->|SQL| DB[(Postgres)]
   GW -->|HTTPS + X-API-Key<br/>jobs + settle| LOC[LOC clearinghouse<br/>route selection + PM tickets]
-  GW -->|Livepeer-* headers<br/>+ Livepeer-Payment| BROKER[capability-broker<br/>on orchestrator host]
+  GW -->|Livepeer-* headers<br/>+ Livepeer-Authorization| BROKER[capability-broker<br/>on orchestrator host]
   BROKER --> WORKER[capability worker<br/>chat / embeddings / audio / tts / images / rerank]
   GW -->|optional| RESEND[Resend<br/>email]
 
@@ -53,12 +53,12 @@ their own containers / on other hosts).
 | **Portal** | `web/portal/` | Authenticated user dashboard: account, API keys, usage. | Cookie-session UX. |
 | **Admin** | `web/admin/` | Operator console: waitlist queue, users, usage, LOC + catalog debug. | `X-Admin-Token` UX (stored in localStorage). |
 
-Route selection and payment minting are delegated to the **LOC —
+Route selection and wholesale funding and authorization are delegated to the **LOC —
 Livepeer Open Clearinghouse**, an external HTTP service
 (the sibling localhost service in development) reached with an `X-API-Key`
 header. The gateway opens a job per `/v1/*` request and settles actual
 usage afterwards. The LOC owns chain access and the pooled wallet that
-signs payment (PM) tickets; this repo holds no keys and never talks to
+signs payment (PM) tickets; this repo holds no chain keys and never talks to
 the chain. The LOC is **not** in this repository and is not part of the
 compose stack.
 
@@ -187,7 +187,7 @@ erDiagram
 **One Postgres database. One migration track.** `gateway/migrations/`
 holds numbered `.sql` files applied in order at boot by a
 home-grown runner (`gateway/src/db.ts`). The current shape is
-`0001_initial.sql` through `0009_usage_outcome_not_refund.sql`. Migrations
+`0001_initial.sql` through `0010_wholesale_authorizations.sql`. Migrations
 `0004`–`0009` are the breaking paid-job/v1 transition: LOC and broker
 identities, protocol/transport catalog axes, exact signed evidence, request-ID
 recovery states, capability-scoped model IDs, and the customer outcome
@@ -265,8 +265,8 @@ sequenceDiagram
   Note over GW,DB: 401 if missing/revoked/unapproved
   GW->>DB: INSERT usage_reservations (state='open', work_id)
   GW->>LOC: POST /v1/jobs<br/>Idempotency-Key + transport + funded ceiling
-  Note over LOC: selects one route and mints<br/>the bounded payment envelope
-  LOC-->>GW: {job_id, request_id, work_id, broker_url,<br/>protocol, transport, work_unit, payment_envelope}
+  Note over LOC: selects one route and issues<br/>the bounded spend authorization
+  LOC-->>GW: {job_id, request_id, work_id, broker_url,<br/>protocol, transport, work_unit, spend_authorization}
   GW->>DB: persist LOC and payment identities
   GW->>BRK: POST /v1/job<br/>Protocol + LOC request ID + payment
   BRK->>RNR: forward request
@@ -437,3 +437,11 @@ checked-in files locally and proxying API traffic back to the gateway.
 - Real upstream proxying validation — needs a real `capability-broker`.
   Everything up to and including the broker call is unit-tested via the
   smoke flow.
+
+## Protocol-4 additions
+
+`loc/authorization.ts` freezes exact request bytes and creates caller proof.
+Migration 0010 adds public open intent, private spend authorization, immutable
+route snapshot/domain and separate LOC status fields. `loc/recovery.ts`
+recovers uncertain opens and polls LOC accounting without replaying workloads.
+See [the current contract](./docs/design-docs/paid-job-v1.md).

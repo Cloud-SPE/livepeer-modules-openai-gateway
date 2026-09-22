@@ -2,7 +2,7 @@
 //
 // This Config carries two surfaces:
 //   • Proxy core fields (LOC clearinghouse URL/key, broker timeout, …).
-//     The gateway sources routes + payment envelopes from the LOC
+//     The gateway sources routes + spend authorizations from the LOC
 //     (Livepeer Open Clearinghouse) HTTP API. See loc/ and proxy/.
 //   • SaaS shell fields (auth pepper, admin token, base URL, …).
 //     These are local to this repo; they support the hand-written
@@ -37,7 +37,7 @@ const ConfigSchema = z.object({
   fromEmail: z.string().default('OpenAI Service <noreply@example.com>'),
 
   // ── Livepeer Open Clearinghouse (LOC) / proxy core ───────────────
-  // The LOC owns route selection + payment-ticket minting. The gateway
+  // The LOC owns route selection, wholesale funding and authorization. The gateway
   // opens a job per upstream call and settles actual units afterwards.
   locBaseUrl: z.string().url(),
   locApiKey: z.string().min(1),
