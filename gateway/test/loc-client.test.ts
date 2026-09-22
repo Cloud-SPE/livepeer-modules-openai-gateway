@@ -1,3 +1,4 @@
+import { commitment, routeSnapshot } from './wholesale-fixtures.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
@@ -54,7 +55,9 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
         protocol: 'paid-job/v1',
         transport: 'unary',
         work_unit: 'tokens',
-        payment_envelope: 'cGF5bWVudA==',
+        accounting_mode: 'wholesale_account',
+        route_snapshot: routeSnapshot('https://broker.example', 'openai:chat-completions', 'llama-3'),
+        spend_authorization: 'cGF5bWVudA==',
         expected_value_wei: 1000,
         funded_value_wei: 2000,
         settle_endpoint: '/v1/jobs/job-1/settle',
@@ -63,7 +66,7 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
     }),
     async (baseUrl, requests) => {
       const client = createLocClient({ baseUrl, apiKey: 'test-key', timeoutMs: 5000 });
-      const job = await client.openJob({
+      const job = await client.openJob({ ...commitment,
         idempotencyKey: 'gateway-operation-1',
         capability: 'openai:chat-completions',
         offering: 'llama-3',
@@ -76,7 +79,7 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
       assert.equal(job.protocol, 'paid-job/v1');
       assert.equal(job.transport, 'unary');
       assert.equal(job.workUnit, 'tokens');
-      assert.equal(job.paymentEnvelope, 'cGF5bWVudA==');
+      assert.equal(job.spendAuthorization, 'cGF5bWVudA==');
       assert.equal(job.expectedValueWei, '1000');
 
       assert.equal(requests.length, 1);
@@ -90,6 +93,8 @@ test('openJob sends X-API-Key and snake_case body, maps camelCase response', asy
         offering: 'llama-3',
         transport: 'unary',
         estimated_units: 42,
+        workload_request_digest: commitment.workloadRequestDigest,
+        caller_public_key: commitment.callerPublicKey,
       });
     },
   );
@@ -104,7 +109,7 @@ test('error envelope {error:{code,message}} maps to LocApiError', async () => {
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
       await assert.rejects(
-        client.openJob({ idempotencyKey: 'key', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }),
+        client.openJob({ ...commitment, idempotencyKey: 'key', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }),
         (err: unknown) => {
           assert.ok(err instanceof LocApiError);
           assert.equal(err.status, 402);
@@ -131,7 +136,7 @@ test('request_id_reuse remains a typed LOC refusal', async () => {
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
       await assert.rejects(
-        client.openJob({
+        client.openJob({ ...commitment,
           idempotencyKey: 'same-key',
           capability: 'different-capability',
           offering: 'o',
@@ -161,7 +166,9 @@ test('openJob rejects drift or missing identity in a successful LOC response', a
         protocol: 'paid-job/v1',
         transport: 'stream',
         work_unit: 'tokens',
-        payment_envelope: 'payment',
+        accounting_mode: 'wholesale_account',
+        route_snapshot: routeSnapshot('https://broker.example', 'openai:chat-completions', 'llama-3'),
+        spend_authorization: 'payment',
         expected_value_wei: '1',
         funded_value_wei: '1',
         settle_endpoint: '/v1/jobs/job-1/settle',
@@ -171,7 +178,7 @@ test('openJob rejects drift or missing identity in a successful LOC response', a
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
       await assert.rejects(
-        client.openJob({ idempotencyKey: 'key', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }),
+        client.openJob({ ...commitment, idempotencyKey: 'key', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }),
         (err: unknown) => {
           assert.ok(err instanceof LocApiError);
           assert.equal(err.code, 'loc_contract_invalid');
@@ -195,7 +202,9 @@ test('openJob rejects a cross-origin settle endpoint before credentials can be s
         protocol: 'paid-job/v1',
         transport: 'unary',
         work_unit: 'tokens',
-        payment_envelope: 'payment',
+        accounting_mode: 'wholesale_account',
+        route_snapshot: routeSnapshot('https://broker.example', 'openai:chat-completions', 'llama-3'),
+        spend_authorization: 'payment',
         expected_value_wei: '1',
         funded_value_wei: '1',
         settle_endpoint: 'https://attacker.example/collect-loc-key',
@@ -205,7 +214,7 @@ test('openJob rejects a cross-origin settle endpoint before credentials can be s
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
       await assert.rejects(
-        client.openJob({
+        client.openJob({ ...commitment,
           idempotencyKey: 'key',
           capability: 'c',
           offering: 'o',
@@ -355,7 +364,8 @@ test('large LOC wei integers are preserved without IEEE-754 rounding', async () 
       rawBody: '{"job_id":"job-large","request_id":"request-large",' +
         '"work_id":"work-large","broker_url":"https://broker.example",' +
         '"protocol":"paid-job/v1","transport":"unary","work_unit":"tokens",' +
-        '"payment_envelope":"payment",' +
+        '"spend_authorization":"cGF5bWVudA==","accounting_mode":"wholesale_account",' +
+        '"route_snapshot":' + JSON.stringify(routeSnapshot()) + ',' +
         '"expected_value_wei":123456789012345678901234567890,' +
         '"funded_value_wei":123456789012345678901234567891,' +
         '"settle_endpoint":"/v1/jobs/job-large/settle",' +
@@ -363,7 +373,7 @@ test('large LOC wei integers are preserved without IEEE-754 rounding', async () 
     }),
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
-      const response = await client.openJob({
+      const response = await client.openJob({ ...commitment,
         idempotencyKey: 'key-large',
         capability: 'c',
         offering: 'o',
@@ -388,7 +398,7 @@ test('listCapabilities flattens snake_case payload', async () => {
             offerings: [
               {
                 id: 'llama-3',
-                price_per_work_unit_wei: '100',
+                price_per_work_unit_wei: '100', units_per_price: '1000',
                 work_unit: 'tokens',
                 protocol: 'paid-job/v1',
                 job: { transports: ['unary', 'stream'] },
@@ -428,7 +438,7 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
           },
           offerings: [{
             id: 'default',
-            price_per_work_unit_wei: '100',
+            price_per_work_unit_wei: '100', units_per_price: '1000',
             work_unit: 'seconds',
             work_unit_estimator: {
               id: 'multipart-audio-duration/v1',
@@ -457,4 +467,32 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
       assert.deepEqual(capability.estimator, offering.estimator);
     },
   );
+});
+
+test('current catalog rejects unsafe denominators and retains exact price scaling', async () => {
+  for (const denominator of ['1000', '9007199254740993', '0']) {
+    await withMockLoc(() => ({status:200,body:{items:[{name:'c',work_unit:'tokens',offerings:[{id:'o',price_per_work_unit_wei:'100',units_per_price:denominator,work_unit:'tokens',protocol:'paid-job/v1',job:{transports:['unary']}}]}]}}), async baseUrl => {
+      const loc=createLocClient({baseUrl,apiKey:'key',timeoutMs:1000});
+      if (denominator==='1000') assert.equal((await loc.listCapabilities())[0]!.offerings[0]!.unitsPerPrice,1000);
+      else await assert.rejects(loc.listCapabilities(),LocApiError);
+    });
+  }
+});
+
+test('balance uses the API-key usage overview rather than the session-only balance endpoint', async()=>{
+  await withMockLoc(()=>({status:200,body:{available_wei:'12345678901234567890'}}),async(baseUrl,requests)=>{
+    const loc=createLocClient({baseUrl,apiKey:'key',timeoutMs:1000});
+    assert.equal((await loc.getBalance()).amountWei,'12345678901234567890');
+    assert.equal(requests[0]!.url,'/v1/accounts/me/usage/overview');
+  });
+});
+
+test('LOC status preserves accounting authority and rejects cross-job responses',async()=>{
+  await withMockLoc(()=>({status:200,body:{job_id:'j',request_id:'r',work_id:'a',state:'closed',accounting_outcome:'conservative_full_charge',actual_units:null,billed_value_wei:'123',closed_at:'2026-09-22T00:00:00Z'}}),async baseUrl=>{
+    const loc=createLocClient({baseUrl,apiKey:'key',timeoutMs:1000});
+    const result=await loc.getJob('j');
+    assert.equal(result.accountingOutcome,'conservative_full_charge');
+    assert.equal(result.actualUnits,null);
+    await assert.rejects(loc.getJob('wrong'),/identity drift/);
+  });
 });

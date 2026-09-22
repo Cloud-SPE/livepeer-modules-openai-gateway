@@ -2,7 +2,7 @@
 
 The gateway does not rank brokers. For every OpenAI request it asks LOC to
 open one `paid-job/v1` job for the requested capability, offering, and HTTP
-transport. LOC selects the route and returns the payment envelope and broker
+transport. LOC selects the route and returns the spend authorization and broker
 URL as one idempotent outcome.
 
 ## Hot path
@@ -10,16 +10,18 @@ URL as one idempotent outcome.
 ```text
 gateway -> LOC: POST /v1/jobs
   Idempotency-Key: <gateway operation UUID>
-  { capability, offering, transport, estimated_units, max_total_units }
+  { capability, offering, transport, estimated_units, max_total_units,
+    workload_request_digest, caller_public_key }
 
 LOC -> gateway:
   { job_id, request_id, work_id, broker_url, protocol, transport,
-    work_unit, payment_envelope, settle_endpoint }
+    work_unit, spend_authorization, accounting_mode, route_snapshot, settle_endpoint }
 
 gateway -> broker: POST /v1/job
   Livepeer-Protocol: paid-job/v1
   Livepeer-Request-Id: <LOC request_id>
-  Livepeer-Payment: <opaque envelope>
+  Livepeer-Authorization: <spend authorization>
+  Livepeer-Caller-Proof: <invocation proof>
 ```
 
 The gateway verifies that LOC returned `paid-job/v1`, the requested transport,
@@ -45,7 +47,7 @@ reproducible client estimator contract.
 
 | Concern | Owner |
 |---|---|
-| Route selection and payment minting | LOC |
+| Route selection and wholesale funding and authorization | LOC |
 | Transport and work-unit requirement | OpenAI endpoint adapter |
 | Broker admission and execution | Modules broker |
 | Final usage and debit evidence | Broker-signed settlement |

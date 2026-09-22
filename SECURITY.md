@@ -99,7 +99,7 @@ rate-limiting; that's a separate plan.
 - `API_KEY_HASH_PEPPER`
 - `IP_HASH_PEPPER`
 - `LOC_API_KEY` — authenticates the gateway to the Livepeer Open
-  Clearinghouse (route selection + payment minting); `/v1/*` cannot
+  Clearinghouse (route selection + wholesale funding and authorization); `/v1/*` cannot
   function without it. Treat as a secret. Boot fails if unset.
 
 **Optional but strongly recommended**:
@@ -123,3 +123,13 @@ migrations, no secrets in docs.
   deployer's problem).
 - Pepper rotation without invalidating existing keys (dual-lookup).
 - Penetration testing. This is beta; security is best-effort.
+
+## Invocation proof and wholesale authority
+
+The gateway generates an ephemeral secp256k1 key for each invocation. This
+is not an EVM payment wallet. Only its public key and exact workload digest
+are persisted before LOC open; the private key and workload bytes are not
+stored for restart replay. Signed spend authorizations and route snapshots
+are private database recovery material. Public diagnostics expose domain
+identity and accounting state, never authorization/proof bytes. LOC owns
+chain keys, aggregate account funding and signature verification.

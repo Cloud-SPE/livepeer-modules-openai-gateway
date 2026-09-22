@@ -5,7 +5,8 @@ export interface SendOpts {
   brokerUrl: string;
   capability: string;
   offering: string;
-  paymentBlob: string;
+  authorization: string;
+  callerProof: string;
   body: BodyInit | null;
   contentType?: string;
   requestId: string;
@@ -26,7 +27,8 @@ export async function send(opts: SendOpts): Promise<SendResult> {
   const headers = new Headers();
   headers.set(HEADER.CAPABILITY, opts.capability);
   headers.set(HEADER.OFFERING, opts.offering);
-  headers.set(HEADER.PAYMENT, opts.paymentBlob);
+  headers.set(HEADER.AUTHORIZATION, opts.authorization);
+  headers.set(HEADER.CALLER_PROOF, opts.callerProof);
   headers.set(HEADER.PROTOCOL, PAID_JOB_PROTOCOL);
   headers.set(HEADER.REQUEST_ID, opts.requestId);
   if (opts.contentType) headers.set("Content-Type", opts.contentType);
@@ -34,6 +36,7 @@ export async function send(opts: SendOpts): Promise<SendResult> {
   const url = new URL("/v1/job", opts.brokerUrl).toString();
   const resp = await fetch(url, {
     method: "POST",
+    redirect: "error",
     headers,
     body: opts.body,
     signal: opts.signal,

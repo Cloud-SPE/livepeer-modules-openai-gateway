@@ -182,3 +182,22 @@ test('unsigned settlement envelopes are rejected', () => {
   const encoded = Buffer.from(JSON.stringify({ payload: { job_id: 'x' } })).toString('base64');
   assert.throws(() => decodeSignedSettlement(encoded), BrokerSettlementContractError);
 });
+
+test('ADMISSION_REJECTED stays recoverable until fenced evidence exists', async () => {
+  await withBroker(() => ({status:200, body:{outcome:'ADMISSION_REJECTED', state:'payment_rejected'}}), async (brokerUrl) => {
+    const result = await lookupBrokerSettlement(row({brokerUrl,brokerJobId:null}),1000);
+    assert.equal(result.kind,'deferred');
+    if (result.kind === 'deferred') assert.equal(result.state,'no_record');
+  });
+});
+
+test('proto3 omitted zero units and empty BigUInt are interpreted without changing signed payload', () => {
+  const encoded = encodeEnvelope({actual_units:undefined,debited_units:undefined,billed_value_wei:{}});
+  const decoded = decodeSignedSettlement(encoded);
+  assert.equal(decoded.actualUnits,'0');
+  assert.equal(decoded.debitedUnits,'0');
+  assert.equal(decoded.billedValueWei,'0');
+  const payload = decoded.envelope['payload'] as Record<string,unknown>;
+  assert.equal(Object.hasOwn(payload,'actual_units'),false);
+  assert.deepEqual(payload['billed_value_wei'],{});
+});

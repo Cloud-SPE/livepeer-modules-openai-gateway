@@ -8,7 +8,7 @@ Reliability properties this gateway is expected to uphold.
   key and content. After broker dispatch, the gateway never automatically
   creates replacement paid work.
 - **Gateway pays the network via the LOC, once per opened job.** Each
-  `/v1/*` request opens a LOC job that mints one payment envelope and
+  `/v1/*` request opens a LOC job that issues one spend authorization and
   encumbers a ceiling for that exchange. Signed terminal broker evidence
   determines actual accounting and is submitted to LOC asynchronously. See
   [`docs/design-docs/payment-flow.md`](./docs/design-docs/payment-flow.md).
@@ -130,3 +130,14 @@ for how the checks compose into the boot story.
   share buckets; a user gets `N * per-replica-burst` effective
   burst. Distributed rate-limiting is a future plan.
 - **No SLA.** This is beta.
+
+## Protocol-4 recovery
+
+Migration 0010 records the public LOC open intent before network I/O. After
+the foreground retry grace period, recovery repeats identical opens solely
+to recover identity; it never replays workload bytes. NO_RECORD and
+ADMISSION_REJECTED remain eligible for polling. LOC independently requests
+fenced non-admission evidence and exposes authoritative job status.
+LOC status, signed broker evidence and customer outcome stay distinct; a
+conservative full charge is never presented as a broker claim or refund.
+The historical ten-attempt debit expiration no longer applies.

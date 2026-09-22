@@ -33,7 +33,7 @@ export interface ResolveInput {
   capability: string;
   requestedModel: string;
   transport: JobTransport;
-  expectedWorkUnit?: string;
+  expectedWorkUnit?: string | readonly string[];
   expectedEstimator?: RequiredEstimatorContract;
 }
 
@@ -52,7 +52,8 @@ export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> 
       c.offering === input.requestedModel,
   );
   const pick = matches.find((c) => c.transports.includes(input.transport));
-  if (pick && input.expectedWorkUnit && pick.workUnit !== input.expectedWorkUnit) {
+  const expectedUnits = typeof input.expectedWorkUnit === 'string' ? [input.expectedWorkUnit] : input.expectedWorkUnit;
+  if (pick && expectedUnits && !expectedUnits.includes(pick.workUnit)) {
     throw new Error(
       `offering ${pick.offering} uses work unit ${pick.workUnit}; expected ${input.expectedWorkUnit}`,
     );

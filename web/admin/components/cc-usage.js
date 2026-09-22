@@ -79,6 +79,7 @@ function shortId(value) {
 }
 
 function accountingLabel(row) {
+  if (row.locAccountingOutcome && row.locAccountingOutcome !== 'unresolved') return `LOC: ${row.locAccountingOutcome.replaceAll('_', ' ')}`;
   if (row.settlementLookupState === 'accounting_pending') return 'accounting pending';
   if (row.terminalEvidenceType) return row.terminalEvidenceType.replaceAll('_', ' ');
   return row.settleState ?? row.settlementLookupState ?? row.state;

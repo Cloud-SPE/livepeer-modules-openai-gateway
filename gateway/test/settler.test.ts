@@ -31,6 +31,7 @@ function fakeLoc(
 ): { loc: LocClient; settles: Array<{ settleEndpoint: string; jobId: string; req: SettleJobRequest }> } {
   const settles: Array<{ settleEndpoint: string; jobId: string; req: SettleJobRequest }> = [];
   const loc: LocClient = {
+    async getJob() { throw new Error('unused'); },
     async openJob() {
       throw new Error('not used');
     },

@@ -38,9 +38,8 @@ export const usageReservations = pgTable(
     selectedOffering: text('selected_offering'),
     selectedWorkUnit: text('selected_work_unit'),
     unitsPerPrice: bigint('units_per_price', { mode: 'number' }),
-    // Quote identity columns are daemon-era leftovers: the LOC owns
-    // quote/price bookkeeping, so these stay null. Kept nullable to
-    // avoid a destructive migration of historical rows.
+    // Selected quote identity comes from LOC's pinned route snapshot.
+    // Nullable for historical reservations.
     quoteId: text('quote_id'),
     quoteVersion: text('quote_version'),
     constraintFingerprintHex: text('constraint_fingerprint_hex'),
@@ -53,6 +52,17 @@ export const usageReservations = pgTable(
     // background settler retries POST /v1/jobs/{loc_job_id}/settle until
     // LOC acks (409 job_already_settled counts as settled).
     locJobId: text('loc_job_id'),
+    locOpenRequest: jsonb('loc_open_request').$type<import('../loc/client.js').OpenJobRequest>(),
+    locOpenRecoveryState: text('loc_open_recovery_state'),
+    locOpenNextAt: timestamp('loc_open_next_at', { withTimezone: true }),
+    accountingMode: text('accounting_mode'),
+    spendAuthorization: text('spend_authorization'),
+    routeSnapshot: jsonb('route_snapshot').$type<import('../loc/client.js').RouteSnapshot>(),
+    settlementDomainId: text('settlement_domain_id'),
+    locAccountingState: text('loc_accounting_state'),
+    locAccountingOutcome: text('loc_accounting_outcome'),
+    locStatusNextAt: timestamp('loc_status_next_at', { withTimezone: true }),
+    locStatusError: text('loc_status_error'),
     // Five identities remain deliberately distinct. `workId` above is
     // this gateway's operation id; these bind the LOC open, payment,
     // and broker exchange records without guessing across namespaces.
@@ -129,7 +139,7 @@ export const usageReservations = pgTable(
       .where(sql`${t.settleState} = 'pending'`),
     settlementLookupPendingIdx: index('idx_usage_reservations_settlement_lookup_pending')
       .on(t.settlementLookupNextAt)
-      .where(sql`${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight')`),
+      .where(sql`${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight', 'no_record')`),
     locIdempotencyKeyIdx: uniqueIndex('idx_usage_reservations_loc_idempotency_key')
       .on(t.locIdempotencyKey),
     locRequestIdIdx: uniqueIndex('idx_usage_reservations_loc_request_id').on(t.locRequestId),

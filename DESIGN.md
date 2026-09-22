@@ -14,7 +14,7 @@ Every architectural choice in this repo flows from that requirement.
 
 A single TypeScript Fastify service translates OpenAI-shaped requests into
 the Livepeer wire spec, opens a job on the **LOC (Livepeer Open
-Clearinghouse)** — which picks the route AND mints the payment envelope —
+Clearinghouse)** — which picks the route and issues the spend authorization —
 and forwards the request to the broker the LOC returns, returning the
 response verbatim. Actual usage is settled back to the LOC afterwards.
 

@@ -45,8 +45,10 @@ connections. Failure modes per step. Graceful shutdown contract.
 10. startRegistryRefresh({…})                                     [non-blocking]
       └─ kick off first catalog refresh, schedule setInterval(intervalMs)
 
-11. startSettler({ db, loc, intervalMs, maxAttempts })            [non-blocking]
-      └─ schedule the durable settle-intent drain loop
+11. startSettler({ db, loc, intervalMs, alertAttempts })            [non-blocking]
+      ├─ schedule the durable settle-intent drain loop (alerts do not abandon retries)
+      ├─ startRecovery: recover public open intents and poll LOC accounting
+      └─ startSettlementLookup: recover signed broker evidence by request identity
 
 12. app.listen({ port, host })                                    [throws if port busy]
 ```
@@ -73,7 +75,8 @@ SQL; the LOC health probe is best-effort and bounded.
 ```text
 1. log "shutting down"
 2. cancelRefresh()           — stop the catalog refresh interval
-3. cancelSettler()           — stop the signed-settlement drain loop
+3. cancelSettler(), cancelRecovery(), cancelSettlementLookup()
+                            — stop accounting and evidence recovery intervals
 4. rateLimiter.stop()        — clear the evict interval
 5. registryCatalog.close?.() — release any catalog resources
 6. app.close()               — stop accepting + drain in-flight

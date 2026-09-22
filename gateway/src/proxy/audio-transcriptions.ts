@@ -23,6 +23,7 @@ import {
   commitReservation,
   openReservation,
   recordPaidJob,
+  recordJobPrepared,
   recordSelectedRoute,
   failReservation,
 } from './reservation.js';
@@ -114,7 +115,7 @@ export async function registerAudioTranscriptionsRoute(
           capability,
           requestedModel,
           transport: 'multipart',
-          expectedWorkUnit: 'seconds',
+          expectedWorkUnit: ['seconds', 'audio_seconds'],
           expectedEstimator: REQUIRED_ESTIMATOR,
         }));
       } catch {
@@ -148,6 +149,7 @@ export async function registerAudioTranscriptionsRoute(
           body,
           contentType,
           idempotencyKey: handle.workId,
+          onJobPrepared: (request) => recordJobPrepared(deps, handle, request),
           onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);

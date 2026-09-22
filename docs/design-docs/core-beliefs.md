@@ -41,12 +41,12 @@ us, that's a bug. We don't "improve" the OpenAI API shape.
 
 ## 6. The gateway pays the network via the LOC
 
-Even with no customer billing, every `/v1/*` request opens a job on the
-LOC (Livepeer Open Clearinghouse), which selects the route and mints the
-`Livepeer-Payment` envelope, charging the operator's credit balance the
-estimate. The gateway settles actual usage afterwards and holds no chain
-keys. The network charges us; we don't charge users yet. Removing payment
-is removing the product.
+Even with no customer billing, each inference request opens a LOC job for a
+route-bound spend authorization and operator credit hold. The gateway sends
+exact committed bytes with caller proof, then submits signed broker evidence.
+LOC owns aggregate wholesale funding and chain keys. The gateway's ephemeral
+invocation key is not a payment wallet. Removing authorization/accounting is
+removing the product.
 
 ## 7. Models reflect reality
 

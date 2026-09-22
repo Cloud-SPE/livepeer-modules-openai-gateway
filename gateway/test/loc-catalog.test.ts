@@ -9,14 +9,14 @@ test('flattenCapabilities maps offerings to RouteCandidates', () => {
       name: 'openai:chat-completions',
       workUnit: 'tokens',
       offerings: [
-        { id: 'llama-3', pricePerWorkUnitWei: '100', workUnit: 'tokens', protocol: 'paid-job/v1', transports: ['unary', 'stream'], extra: {} },
-        { id: 'qwen-2', pricePerWorkUnitWei: null, workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} },
+        { id: 'llama-3', unitsPerPrice: 1, pricePerWorkUnitWei: '100', workUnit: 'tokens', protocol: 'paid-job/v1', transports: ['unary', 'stream'], extra: {} },
+        { id: 'qwen-2', unitsPerPrice: 1, pricePerWorkUnitWei: null, workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} },
       ],
     },
     {
       name: 'openai:embeddings',
       workUnit: 'tokens',
-      offerings: [{ id: 'bge-m3', pricePerWorkUnitWei: '5', workUnit: 'tokens', protocol: 'paid-job/v1', transports: ['unary'], extra: {} }],
+      offerings: [{ id: 'bge-m3', unitsPerPrice: 1, pricePerWorkUnitWei: '5', workUnit: 'tokens', protocol: 'paid-job/v1', transports: ['unary'], extra: {} }],
     },
   ]);
 
@@ -49,7 +49,7 @@ test('flattenCapabilities derives runner model and preserves protocol transports
       offerings: [
         {
           id: 'vllm-qwen3.6-27b-default',
-          pricePerWorkUnitWei: '100',
+          unitsPerPrice: 1, pricePerWorkUnitWei: '100',
           workUnit: 'tokens',
           protocol: 'paid-job/v1',
           transports: ['unary', 'stream'],
@@ -73,21 +73,21 @@ test('flattenCapabilities derives runner model and preserves protocol transports
 
 test('flattenCapabilities drops empty names and offering ids', () => {
   const candidates = flattenCapabilities([
-    { name: '', workUnit: null, offerings: [{ id: 'x', pricePerWorkUnitWei: '1', workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} }] },
-    { name: 'rerank', workUnit: 'requests', offerings: [{ id: '', pricePerWorkUnitWei: '1', workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} }] },
+    { name: '', workUnit: null, offerings: [{ id: 'x', unitsPerPrice: 1, pricePerWorkUnitWei: '1', workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} }] },
+    { name: 'rerank', workUnit: 'requests', offerings: [{ id: '', unitsPerPrice: 1, pricePerWorkUnitWei: '1', workUnit: null, protocol: 'paid-job/v1', transports: ['unary'], extra: {} }] },
   ]);
   assert.equal(candidates.length, 0);
 });
 
 test('flattenCapabilities ignores other protocols and rejects malformed paid-job offerings', () => {
   assert.deepEqual(flattenCapabilities([{ name: 'meetings', workUnit: 'seconds', offerings: [
-    { id: 'default', pricePerWorkUnitWei: '1', workUnit: 'seconds', protocol: 'paid-session/v1', transports: [], extra: {} },
+    { id: 'default', unitsPerPrice: 1, pricePerWorkUnitWei: '1', workUnit: 'seconds', protocol: 'paid-session/v1', transports: [], extra: {} },
   ] }]), []);
   assert.throws(() => flattenCapabilities([{ name: 'chat', workUnit: 'tokens', offerings: [
-    { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: '', transports: ['unary'], extra: {} },
+    { id: 'bad', unitsPerPrice: 1, pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: '', transports: ['unary'], extra: {} },
   ] }]), /missing protocol/);
   assert.throws(() => flattenCapabilities([{ name: 'chat', workUnit: 'tokens', offerings: [
-    { id: 'bad', pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-job\/v1', transports: [], extra: {} },
+    { id: 'bad', unitsPerPrice: 1, pricePerWorkUnitWei: '1', workUnit: 'tokens', protocol: 'paid-job\/v1', transports: [], extra: {} },
   ] }]), /missing job transports/);
 });
 
@@ -97,7 +97,7 @@ test('flattenCapabilities preserves estimator metadata for endpoint funding chec
     workUnit: 'seconds',
     offerings: [{
       id: 'default',
-      pricePerWorkUnitWei: '100',
+      unitsPerPrice: 1, pricePerWorkUnitWei: '100',
       workUnit: 'seconds',
       estimator: {
         id: 'multipart-audio-duration/v1',
@@ -112,4 +112,11 @@ test('flattenCapabilities preserves estimator metadata for endpoint funding chec
   }]);
   assert.equal(candidate!.estimator?.id, 'multipart-audio-duration/v1');
   assert.equal(candidate!.estimator?.exactness, 'exact-or-reject');
+});
+
+test('catalog retains quoted units-per-price instead of assuming one', () => {
+  const rows = flattenCapabilities([{name:'openai:chat-completions',workUnit:'tokens',offerings:[{
+    id:'model', pricePerWorkUnitWei:'1000',unitsPerPrice:100,workUnit:'tokens',protocol:'paid-job/v1',transports:['unary'],extra:{},
+  }]}]);
+  assert.equal(rows[0]!.unitsPerPrice,100);
 });

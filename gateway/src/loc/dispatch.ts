@@ -1,21 +1,15 @@
-// LOC-backed dispatch: open a clearinghouse job (route selection +
-// payment minting in one call), forward to the returned broker, and
-// hand the jobRef back to the route handler so it can enqueue the
-// durable settle with actual units (see reservation.ts / settler.ts).
-//
-// Replaces the daemon-era routeDispatch.ts. The http-* send modules
-// are unchanged — they only need brokerUrl + payment blob.
+// Prepare one exact workload commitment, open LOC idempotently, persist its
+// authorization/route identity, and dispatch once with caller proof.
+// Restart recovery discovers accounting state without replaying workload bytes.
 
+import { prepareInvocation } from './authorization.js';
+import type { OpenJobRequest, RouteSnapshot } from './client.js';
 import * as httpMultipart from '../proxy/livepeer/http-multipart.js';
 import * as httpReqresp from '../proxy/livepeer/http-reqresp.js';
 import * as httpStream from '../proxy/livepeer/http-stream.js';
 import { LivepeerBrokerError } from '../proxy/livepeer/errors.js';
 import { LocApiError, type JobTransport, type LocClient, type OpenJobResponse } from './client.js';
 
-// Kept shape-compatible with the daemon-era RouteCandidate so the
-// reservation/audit/admin surfaces compile unchanged. Fields the LOC
-// job response does not carry (ethAddress, price, quote identity) are
-// empty — the LOC owns quote/price bookkeeping now.
 export interface RouteCandidate {
   brokerUrl: string;
   capability: string;
@@ -49,6 +43,9 @@ export interface JobRef {
   brokerUrl: string;
   capability: string;
   offering: string;
+  spendAuthorization: string;
+  routeSnapshot: RouteSnapshot;
+  accountingMode: 'wholesale_account';
 }
 
 export interface DispatchSuccess<T> {
@@ -66,6 +63,7 @@ interface DispatchCommon {
   idempotencyKey: string;
   /** Total job-open attempts (default 3 = 1 + 2 retries). */
   maxJobAttempts?: number;
+  onJobPrepared?: (request: OpenJobRequest) => Promise<void>;
   /** Called durably after LOC open and again after broker admission. */
   onJobUpdate?: (job: JobRef, candidate: RouteCandidate) => Promise<void>;
 }
@@ -89,42 +87,48 @@ const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const JOB_OPEN_RETRY_BASE_MS = 250;
 
 export async function dispatchReqresp(opts: ReqRespDispatch): Promise<DispatchSuccess<httpReqresp.SendResult>> {
-  return attemptJob(opts, 'unary', async (job) =>
+  const prepared = await prepareInvocation(opts.body as BodyInit | null, opts.contentType);
+  return attemptJob(opts, 'unary', prepared, async (job) =>
     httpReqresp.send({
       brokerUrl: job.brokerUrl,
       capability: opts.capability,
       offering: opts.offering,
-      paymentBlob: job.paymentEnvelope,
-      body: opts.body,
-      contentType: opts.contentType,
+      authorization: job.spendAuthorization,
+      callerProof: prepared.sign(job.spendAuthorization),
+      body: prepared.body,
+      contentType: prepared.contentType,
       requestId: job.requestId,
     }),
   );
 }
 
 export async function dispatchMultipart(opts: MultipartDispatch): Promise<DispatchSuccess<httpMultipart.SendResult>> {
-  return attemptJob(opts, 'multipart', async (job) =>
+  const prepared = await prepareInvocation(opts.body as BodyInit | null, opts.contentType);
+  return attemptJob(opts, 'multipart', prepared, async (job) =>
     httpMultipart.send({
       brokerUrl: job.brokerUrl,
       capability: opts.capability,
       offering: opts.offering,
-      paymentBlob: job.paymentEnvelope,
-      body: opts.body,
-      contentType: opts.contentType,
+      authorization: job.spendAuthorization,
+      callerProof: prepared.sign(job.spendAuthorization),
+      body: prepared.body,
+      contentType: prepared.contentType,
       requestId: job.requestId,
     }),
   );
 }
 
 export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSuccess<httpStream.StreamHandle>> {
-  return attemptJob(opts, 'stream', async (job) =>
+  const prepared = await prepareInvocation(opts.body as BodyInit | null, opts.contentType);
+  return attemptJob(opts, 'stream', prepared, async (job) =>
     httpStream.sendStreaming({
       brokerUrl: job.brokerUrl,
       capability: opts.capability,
       offering: opts.offering,
-      paymentBlob: job.paymentEnvelope,
-      body: opts.body,
-      contentType: opts.contentType,
+      authorization: job.spendAuthorization,
+      callerProof: prepared.sign(job.spendAuthorization),
+      body: prepared.body,
+      contentType: prepared.contentType,
       requestId: job.requestId,
     }),
   );
@@ -144,23 +148,26 @@ async function attemptJob<T extends {
 }>(
   opts: DispatchCommon,
   transport: JobTransport,
+  prepared: Awaited<ReturnType<typeof prepareInvocation>>,
   send: (job: OpenJobResponse) => Promise<T>,
 ): Promise<DispatchSuccess<T>> {
   const maxAttempts = Math.max(1, opts.maxJobAttempts ?? DEFAULT_MAX_JOB_ATTEMPTS);
   let job: OpenJobResponse | null = null;
   let lastError: unknown;
+  const request: OpenJobRequest = {
+    idempotencyKey: opts.idempotencyKey,
+    capability: opts.capability,
+    offering: opts.offering,
+    transport,
+    estimatedUnits: Math.max(1, Math.floor(opts.estimatedUnits)),
+    ...(opts.maxTotalUnits !== undefined ? { maxTotalUnits: Math.max(1, Math.floor(opts.maxTotalUnits)) } : {}),
+    workloadRequestDigest: prepared.workloadRequestDigest,
+    callerPublicKey: prepared.callerPublicKey,
+  };
+  await opts.onJobPrepared?.(request);
   for (let attempt = 0; attempt < maxAttempts && !job; attempt++) {
     try {
-      job = await opts.loc.openJob({
-        idempotencyKey: opts.idempotencyKey,
-        capability: opts.capability,
-        offering: opts.offering,
-        transport,
-        estimatedUnits: Math.max(1, Math.floor(opts.estimatedUnits)),
-        ...(opts.maxTotalUnits !== undefined
-          ? { maxTotalUnits: Math.max(1, Math.floor(opts.maxTotalUnits)) }
-          : {}),
-      });
+      job = await opts.loc.openJob(request);
     } catch (err) {
       lastError = err;
       if (!shouldRetryJobOpen(err)) throw err;
@@ -256,15 +263,15 @@ function candidateFromJob(
     model: offering,
     protocol: job.protocol,
     transports: [job.transport],
-    ethAddress: '',
-    pricePerWorkUnitWei: '',
+    ethAddress: job.routeSnapshot.eth_address,
+    pricePerWorkUnitWei: job.routeSnapshot.price_per_work_unit_wei,
     workUnit: job.workUnit,
-    unitsPerPrice: 1,
-    quoteId: '',
-    quoteVersion: 0,
-    constraintFingerprint: new Uint8Array(),
-    routeFingerprint: new Uint8Array(),
-    extra: null,
+    unitsPerPrice: job.routeSnapshot.units_per_price,
+    quoteId: job.routeSnapshot.quote_id,
+    quoteVersion: job.routeSnapshot.quote_version,
+    constraintFingerprint: Buffer.from(job.routeSnapshot.constraint_fingerprint, 'hex'),
+    routeFingerprint: Buffer.from(job.routeSnapshot.route_fingerprint, 'hex'),
+    extra: job.routeSnapshot.extra ?? null,
     constraints: null,
   };
 }
@@ -288,10 +295,8 @@ function attachJobContext(
   brokerJobId: string,
 ): void {
   if (err && typeof err === 'object') {
-    Object.assign(err, {
-      jobRef: jobRef(job, opts, brokerJobId),
-      routeCandidate: candidateFromJob(job, opts.capability, opts.offering),
-    });
+    Object.defineProperty(err, 'jobRef', { value: jobRef(job, opts, brokerJobId), configurable: true, enumerable: false });
+    Object.assign(err, { routeCandidate: candidateFromJob(job, opts.capability, opts.offering) });
   }
 }
 
@@ -309,6 +314,9 @@ function jobRef(job: OpenJobResponse, opts: DispatchCommon, brokerJobId: string)
     brokerUrl: job.brokerUrl,
     capability: opts.capability,
     offering: opts.offering,
+    spendAuthorization: job.spendAuthorization,
+    routeSnapshot: job.routeSnapshot,
+    accountingMode: job.accountingMode,
   };
 }
 

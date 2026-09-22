@@ -89,7 +89,7 @@ function main(): void {
     "const fs=require('node:fs');",
     "const p=require('/app/gateway/package.json');",
     `if(p.version!==${JSON.stringify(expectedVersion)})process.exit(10);`,
-    "if(!fs.existsSync('/app/gateway/migrations/0009_usage_outcome_not_refund.sql'))process.exit(11);",
+    "if(!fs.existsSync('/app/gateway/migrations/0010_wholesale_authorizations.sql'))process.exit(11);",
     "if(p.dependencies?.['@livepeer-network/audio-duration'])process.exit(12);",
   ].join('');
   try {
@@ -99,7 +99,7 @@ function main(): void {
   }
 
   pass(`${image} carries version ${expectedVersion} and revision ${actualRevision}`);
-  pass(`linux/${inspect.Architecture}, non-root runtime, /health probe, migrations through 0009`);
+  pass(`linux/${inspect.Architecture}, non-root runtime, /health probe, migrations through 0010`);
   pass('image has no @livepeer-network/audio-duration runtime dependency');
   if (inspect.Id) pass(`local image id ${inspect.Id}`);
 }

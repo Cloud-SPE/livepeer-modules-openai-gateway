@@ -130,6 +130,9 @@ export const UsageReservationRow = z
     locSettledUnits: z.string().nullable(),
     locBilledValueWei: z.string().nullable(),
     locSettlementOutcome: z.string().nullable(),
+    locAccountingState: z.string().nullable(),
+    locAccountingOutcome: z.string().nullable(),
+    settlementDomainId: z.string().nullable(),
     settleState: z.enum(['pending', 'settled', 'failed']).nullable(),
     settleAttempts: z.number().int().nonnegative(),
     terminalEvidenceType: z
