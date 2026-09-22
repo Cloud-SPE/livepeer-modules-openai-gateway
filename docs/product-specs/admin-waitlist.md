@@ -58,7 +58,7 @@ running. Polish optional; correctness mandatory.
 1. Operator navigates to `#/health` or `#/registry`.
 2. `#/health` shows the concise operator-facing view:
    capability availability, selectable-vs-unavailable model counts,
-   plus per-model interaction modes and offerings.
+   plus per-model protocol, transports, and offerings.
 3. `#/registry` is the deeper diagnostic view.
 4. Live candidate table shows what `registryCatalog.inspect()` sees
    right now from the LOC capability catalog (one row per offering id).
@@ -91,7 +91,7 @@ running. Polish optional; correctness mandatory.
   the public catalog endpoint.
 - Admin health and registry screens include inline help affordances for
   ambiguous terms such as `live only`, `cached only`, `offerings`,
-  interaction modes, and LOC credit balance / settle backlog.
+  transports, and LOC credit balance / settlement backlog.
 
 ## Edge cases
 

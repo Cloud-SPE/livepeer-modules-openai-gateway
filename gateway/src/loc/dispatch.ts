@@ -6,14 +6,11 @@
 // Replaces the daemon-era routeDispatch.ts. The http-* send modules
 // are unchanged — they only need brokerUrl + payment blob.
 
-import { LivepeerBrokerError } from '../proxy/livepeer/errors.js';
 import * as httpMultipart from '../proxy/livepeer/http-multipart.js';
 import * as httpReqresp from '../proxy/livepeer/http-reqresp.js';
 import * as httpStream from '../proxy/livepeer/http-stream.js';
-import { MODE as MULTIPART_MODE } from '../proxy/livepeer/http-multipart.js';
-import { MODE as REQRESP_MODE } from '../proxy/livepeer/http-reqresp.js';
-import { MODE as STREAM_MODE } from '../proxy/livepeer/http-stream.js';
-import { LocApiError, type LocClient, type OpenJobResponse } from './client.js';
+import { LivepeerBrokerError } from '../proxy/livepeer/errors.js';
+import { LocApiError, type JobTransport, type LocClient, type OpenJobResponse } from './client.js';
 
 // Kept shape-compatible with the daemon-era RouteCandidate so the
 // reservation/audit/admin surfaces compile unchanged. Fields the LOC
@@ -24,7 +21,8 @@ export interface RouteCandidate {
   capability: string;
   offering: string;
   model: string | null;
-  interactionMode: string | null;
+  protocol: string;
+  transports: Array<'unary' | 'stream' | 'multipart'>;
   ethAddress: string;
   pricePerWorkUnitWei: string;
   workUnit: string;
@@ -39,8 +37,18 @@ export interface RouteCandidate {
 
 /** Handle for settling the LOC job once actual units are known. */
 export interface JobRef {
+  idempotencyKey: string;
   jobId: string;
+  brokerJobId: string;
+  requestId: string;
   workId: string;
+  protocol: 'paid-job/v1';
+  transport: JobTransport;
+  workUnit: string;
+  settleEndpoint: string;
+  brokerUrl: string;
+  capability: string;
+  offering: string;
 }
 
 export interface DispatchSuccess<T> {
@@ -54,9 +62,12 @@ interface DispatchCommon {
   capability: string;
   offering: string;
   estimatedUnits: number;
-  requestId: string;
+  maxTotalUnits?: number;
+  idempotencyKey: string;
   /** Total job-open attempts (default 3 = 1 + 2 retries). */
   maxJobAttempts?: number;
+  /** Called durably after LOC open and again after broker admission. */
+  onJobUpdate?: (job: JobRef, candidate: RouteCandidate) => Promise<void>;
 }
 
 interface ReqRespDispatch extends DispatchCommon {
@@ -75,9 +86,10 @@ interface StreamDispatch extends DispatchCommon {
 }
 
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
+const JOB_OPEN_RETRY_BASE_MS = 250;
 
 export async function dispatchReqresp(opts: ReqRespDispatch): Promise<DispatchSuccess<httpReqresp.SendResult>> {
-  return attemptJobs(opts, REQRESP_MODE, async (job) =>
+  return attemptJob(opts, 'unary', async (job) =>
     httpReqresp.send({
       brokerUrl: job.brokerUrl,
       capability: opts.capability,
@@ -85,13 +97,13 @@ export async function dispatchReqresp(opts: ReqRespDispatch): Promise<DispatchSu
       paymentBlob: job.paymentEnvelope,
       body: opts.body,
       contentType: opts.contentType,
-      requestId: opts.requestId,
+      requestId: job.requestId,
     }),
   );
 }
 
 export async function dispatchMultipart(opts: MultipartDispatch): Promise<DispatchSuccess<httpMultipart.SendResult>> {
-  return attemptJobs(opts, MULTIPART_MODE, async (job) =>
+  return attemptJob(opts, 'multipart', async (job) =>
     httpMultipart.send({
       brokerUrl: job.brokerUrl,
       capability: opts.capability,
@@ -99,13 +111,13 @@ export async function dispatchMultipart(opts: MultipartDispatch): Promise<Dispat
       paymentBlob: job.paymentEnvelope,
       body: opts.body,
       contentType: opts.contentType,
-      requestId: opts.requestId,
+      requestId: job.requestId,
     }),
   );
 }
 
 export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSuccess<httpStream.StreamHandle>> {
-  return attemptJobs(opts, STREAM_MODE, async (job) =>
+  return attemptJob(opts, 'stream', async (job) =>
     httpStream.sendStreaming({
       brokerUrl: job.brokerUrl,
       capability: opts.capability,
@@ -113,92 +125,140 @@ export async function dispatchStream(opts: StreamDispatch): Promise<DispatchSucc
       paymentBlob: job.paymentEnvelope,
       body: opts.body,
       contentType: opts.contentType,
-      requestId: opts.requestId,
+      requestId: job.requestId,
     }),
   );
 }
 
 // ── core loop ───────────────────────────────────────────────────────
-// Per attempt: open a fresh job → verify the LOC granted the desired
-// interaction mode → send to the returned broker. Failed attempts get
-// a best-effort inline settle(0) so the estimate's charge is refunded;
-// the FINAL failed job's ref is attached to the thrown error so the
-// handler can persist a durable settle(0) (at-least-once; LOC's 409
-// job_already_settled makes the overlap idempotent-safe).
+// Retry the same idempotent LOC open until it converges, persist the
+// returned identities, then send exactly once to the selected broker.
+// Broker failures never manufacture a zero-unit settlement; the
+// durable lookup worker retrieves the signed terminal outcome.
 
-async function attemptJobs<T>(
+async function attemptJob<T extends {
+  jobId?: string;
+  workUnit?: string;
+  body?: unknown;
+  headers?: Headers | Record<string, string | string[] | undefined>;
+}>(
   opts: DispatchCommon,
-  desiredMode: string,
+  transport: JobTransport,
   send: (job: OpenJobResponse) => Promise<T>,
 ): Promise<DispatchSuccess<T>> {
   const maxAttempts = Math.max(1, opts.maxJobAttempts ?? DEFAULT_MAX_JOB_ATTEMPTS);
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    let job: OpenJobResponse;
+  let job: OpenJobResponse | null = null;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts && !job; attempt++) {
     try {
       job = await opts.loc.openJob({
+        idempotencyKey: opts.idempotencyKey,
         capability: opts.capability,
         offering: opts.offering,
+        transport,
         estimatedUnits: Math.max(1, Math.floor(opts.estimatedUnits)),
+        ...(opts.maxTotalUnits !== undefined
+          ? { maxTotalUnits: Math.max(1, Math.floor(opts.maxTotalUnits)) }
+          : {}),
       });
     } catch (err) {
       lastError = err;
-      if (!shouldRetryJobOpen(err)) break;
-      continue;
-    }
-
-    if (job.mode !== desiredMode) {
-      lastError = new LivepeerBrokerError({
-        status: 502,
-        code: 'mode_mismatch',
-        message: `LOC selected mode ${job.mode}, need ${desiredMode} for ${opts.capability}/${opts.offering}`,
-        responseBody: '',
-      });
-      // Attach the jobRef so the handler also enqueues a durable
-      // settle(0) for the final mismatched job — idempotent with the
-      // inline settle below (LOC 409s the duplicate).
-      attachJobContext(lastError, job, opts.capability, opts.offering, desiredMode);
-      await settleBestEffort(opts.loc, job.jobId, 'mode_mismatch');
-      continue;
-    }
-
-    try {
-      const result = await send(job);
-      return {
-        candidate: candidateFromJob(job, opts.capability, opts.offering, desiredMode),
-        result,
-        jobRef: { jobId: job.jobId, workId: job.workId },
-      };
-    } catch (err) {
-      lastError = err;
-      attachJobContext(err, job, opts.capability, opts.offering, desiredMode);
-      if (!shouldRetryBroker(err) || attempt === maxAttempts - 1) {
-        // Final job: handler persists the durable settle(0) via jobRef.
-        break;
+      if (!shouldRetryJobOpen(err)) throw err;
+      if (attempt + 1 < maxAttempts) {
+        await delay(JOB_OPEN_RETRY_BASE_MS * 2 ** attempt);
       }
-      await settleBestEffort(opts.loc, job.jobId, describeFailure(err));
     }
   }
+  if (!job) throw lastError ?? new Error(`LOC open failed for ${opts.capability}/${opts.offering}`);
 
-  throw lastError ?? new Error(`dispatch failed for ${opts.capability}/${opts.offering}`);
+  const candidate = candidateFromJob(job, opts.capability, opts.offering);
+  await opts.onJobUpdate?.(jobRef(job, opts, ''), candidate);
+
+  let admittedJobId = '';
+  try {
+    const result = await send(job);
+    validateBrokerMetadata(result, job);
+    admittedJobId = result.jobId!;
+    const ref = jobRef(job, opts, admittedJobId);
+    await opts.onJobUpdate?.(ref, candidate);
+    if (isAccountingReplay(result, transport)) {
+      throw new LivepeerBrokerError({
+        status: 502,
+        code: 'upstream_response_lost',
+        message: 'The original upstream response was lost; accounting recovered without re-execution.',
+      });
+    }
+    return {
+      candidate,
+      result,
+      jobRef: ref,
+    };
+  } catch (err) {
+    let dispatchError = err;
+    if (err instanceof LivepeerBrokerError && err.jobId) {
+      try {
+        validateBrokerErrorMetadata(err, job);
+        admittedJobId = err.jobId;
+        await opts.onJobUpdate?.(jobRef(job, opts, admittedJobId), candidate);
+      } catch (metadataError) {
+        dispatchError = metadataError;
+      }
+    }
+    attachJobContext(dispatchError, job, opts, admittedJobId);
+    throw dispatchError;
+  }
+}
+
+export function isAccountingReplay(
+  result: { body?: unknown; headers?: Headers | Record<string, string | string[] | undefined> },
+  transport: JobTransport,
+): boolean {
+  if (transport === 'stream') {
+    const headers = result.headers;
+    const contentType =
+      headers instanceof Headers
+        ? headers.get('content-type')
+        : headers
+          ? firstHeader(headers, 'content-type')
+          : undefined;
+    return !contentType?.toLowerCase().startsWith('text/event-stream');
+  }
+  const body = result.body;
+  if (typeof body !== 'string' && !(body instanceof ArrayBuffer) && !ArrayBuffer.isView(body)) {
+    return false;
+  }
+  try {
+    const text = typeof body === 'string' ? body : new TextDecoder().decode(body as ArrayBufferView);
+    const parsed = JSON.parse(text) as { replayed?: unknown };
+    return parsed.replayed === true;
+  } catch {
+    return false;
+  }
+}
+
+function firstHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const value = headers[name];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function candidateFromJob(
   job: OpenJobResponse,
   capability: string,
   offering: string,
-  mode: string,
 ): RouteCandidate {
   return {
     brokerUrl: job.brokerUrl,
     capability,
     offering,
     model: offering,
-    interactionMode: mode,
+    protocol: job.protocol,
+    transports: [job.transport],
     ethAddress: '',
     pricePerWorkUnitWei: '',
-    workUnit: '',
+    workUnit: job.workUnit,
     unitsPerPrice: 1,
     quoteId: '',
     quoteVersion: 0,
@@ -209,46 +269,88 @@ function candidateFromJob(
   };
 }
 
-/** Inline refund for jobs we are about to abandon mid-loop. Best-effort:
- * a miss here is bounded (the durable path only covers the final job)
- * and LOC's job lifecycle is the backstop. */
-async function settleBestEffort(loc: LocClient, jobId: string, outcome: string): Promise<void> {
-  try {
-    await loc.settleJob(jobId, { actualUnits: 0, outcome });
-  } catch {
-    // Swallow — never let refund bookkeeping mask the original failure.
-  }
-}
-
 function shouldRetryJobOpen(err: unknown): boolean {
   if (!(err instanceof LocApiError)) return false;
+  if (err.status === 409 && err.code === 'IDEMPOTENCY_IN_PROGRESS') return true;
   // 402 insufficient_credit / 404 no_route_available are deterministic;
-  // 429 + 5xx + network errors are worth another attempt.
+  // 429 + 5xx + network errors are worth another identical attempt.
   return err.status === 429 || err.status >= 500 || err.status === 0;
 }
 
-function shouldRetryBroker(err: unknown): boolean {
-  if (!(err instanceof LivepeerBrokerError)) return true;
-  return err.status >= 500;
-}
-
-function describeFailure(err: unknown): string {
-  if (err instanceof LivepeerBrokerError) return `broker_${err.code}_${err.status}`;
-  if (err instanceof Error && err.message) return err.message.slice(0, 80);
-  return 'unknown_failure';
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function attachJobContext(
   err: unknown,
   job: OpenJobResponse,
-  capability: string,
-  offering: string,
-  mode: string,
+  opts: DispatchCommon,
+  brokerJobId: string,
 ): void {
   if (err && typeof err === 'object') {
     Object.assign(err, {
-      jobRef: { jobId: job.jobId, workId: job.workId } satisfies JobRef,
-      routeCandidate: candidateFromJob(job, capability, offering, mode),
+      jobRef: jobRef(job, opts, brokerJobId),
+      routeCandidate: candidateFromJob(job, opts.capability, opts.offering),
+    });
+  }
+}
+
+function jobRef(job: OpenJobResponse, opts: DispatchCommon, brokerJobId: string): JobRef {
+  return {
+    idempotencyKey: opts.idempotencyKey,
+    jobId: job.jobId,
+    brokerJobId,
+    requestId: job.requestId,
+    workId: job.workId,
+    protocol: job.protocol,
+    transport: job.transport,
+    workUnit: job.workUnit,
+    settleEndpoint: job.settleEndpoint,
+    brokerUrl: job.brokerUrl,
+    capability: opts.capability,
+    offering: opts.offering,
+  };
+}
+
+function validateBrokerMetadata(
+  result: { jobId?: string; workUnit?: string },
+  job: OpenJobResponse,
+): void {
+  if (!result.jobId) {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'protocol_response_invalid',
+      message: 'broker response missing Livepeer-Job-Id',
+    });
+  }
+  if (!result.workUnit || result.workUnit !== job.workUnit) {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'work_unit_mismatch',
+      message: `broker work unit ${result.workUnit ?? '<missing>'} does not match LOC ${job.workUnit}`,
+    });
+  }
+}
+
+/** paid-job/v1 terminal errors carry the same audit identity as successes and
+ * always claim zero delivered units. A pre-admission refusal has no job id and
+ * is recovered (if recorded) by the stable request-id lookup instead. */
+function validateBrokerErrorMetadata(
+  error: LivepeerBrokerError,
+  job: OpenJobResponse,
+): void {
+  if (!error.workUnit || error.workUnit !== job.workUnit) {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'work_unit_mismatch',
+      message: `broker error work unit ${error.workUnit ?? '<missing>'} does not match LOC ${job.workUnit}`,
+    });
+  }
+  if (error.workUnits !== '0') {
+    throw new LivepeerBrokerError({
+      status: 502,
+      code: 'protocol_response_invalid',
+      message: `broker terminal error must report zero work units, received ${error.workUnits ?? '<missing>'}`,
     });
   }
 }

@@ -7,14 +7,15 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp, jobRefFromError } from '../loc/dispatch.js';
+import { dispatchReqresp } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
   openReservation,
+  recordPaidJob,
   recordSelectedRoute,
-  refundReservation,
+  failReservation,
 } from './reservation.js';
 import { bearerAuth } from './auth.js';
 import { rateLimitV1 } from './rateLimit.js';
@@ -52,7 +53,7 @@ export async function registerAudioSpeechRoute(
         apiKeyId: auth.apiKeyId,
         capability,
         model: requestedModel,
-        estimatedWorkUnits: typeof body.input === 'string' ? Math.max(1, body.input.length) : 1,
+        estimatedWorkUnits: textCodePoints(body.input),
       });
 
       const { offering, runnerModel } = await resolveRoute({
@@ -60,28 +61,30 @@ export async function registerAudioSpeechRoute(
         modelMap: deps.config.locModelMap,
         capability,
         requestedModel,
+        transport: 'unary',
+        expectedWorkUnit: 'characters',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
-        const estimatedUnits =
-          typeof body.input === 'string' ? Math.max(1, body.input.length) : 1;
+        const estimatedUnits = textCodePoints(body.input);
         const dispatched = await dispatchReqresp({
           loc: deps.loc,
           capability,
           offering,
           estimatedUnits,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          maxTotalUnits: estimatedUnits,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
-          requestId,
+          idempotencyKey: handle.workId,
+          onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         await commitReservation(deps, handle, {
-          workUnits: typeof body.input === 'string' ? body.input.length : null,
+          workUnits: typeof body.input === 'string' ? textCodePoints(body.input) : null,
           statusCode: dispatched.result.status,
-          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -94,15 +97,18 @@ export async function registerAudioSpeechRoute(
       } catch (err) {
         const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
-        await refundReservation(deps, handle, {
+        await failReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
-          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
     },
   );
+}
+
+export function textCodePoints(value: unknown): number {
+  return typeof value === 'string' ? Math.max(1, [...value].length) : 1;
 }
 
 function brokerStatus(err: unknown): number {

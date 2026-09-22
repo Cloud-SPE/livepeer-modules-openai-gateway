@@ -14,6 +14,7 @@ import { createEmailClient } from './email/index.js';
 import { buildServer } from './server.js';
 import { createLocClient } from './loc/client.js';
 import { startSettler } from './loc/settler.js';
+import { startSettlementLookup } from './loc/settlementLookup.js';
 import { createRateLimiter } from './proxy/rateLimit.js';
 import { createRegistryCatalog } from './registry/catalog.js';
 import { startRegistryRefresh } from './registry/refresh.js';
@@ -109,7 +110,13 @@ async function main(): Promise<void> {
     db,
     loc,
     intervalMs: config.locSettleIntervalMs,
-    maxAttempts: config.locSettleMaxAttempts,
+    alertAttempts: config.locSettleAlertAttempts,
+    log: app.log,
+  });
+  const cancelSettlementLookup = startSettlementLookup({
+    db,
+    timeoutMs: config.brokerCallTimeoutMs,
+    intervalMs: config.locSettleIntervalMs,
     log: app.log,
   });
 
@@ -118,6 +125,7 @@ async function main(): Promise<void> {
     try {
       cancelRefresh();
       cancelSettler();
+      cancelSettlementLookup();
       rateLimiter.stop();
       await registryCatalog.close?.();
       await app.close();

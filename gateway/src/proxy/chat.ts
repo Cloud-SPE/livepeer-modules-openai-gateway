@@ -1,9 +1,8 @@
 // POST /v1/chat/completions — streaming + unary.
 //
-// Streaming: force `stream_options.include_usage = true` so the broker
-// emits a trailing usage frame. Pipe SSE chunks straight to the client
-// as they arrive; in parallel, accumulate them in-memory to parse the
-// final usage chunk for billing settlement.
+// Streaming bytes pass through without body mutation or transcript
+// buffering. Accounting is recovered independently from the broker's
+// signed terminal settlement after the stream ends.
 //
 // Adapted from livepeer-network-modules/openai-gateway/src/routes/chat-completions.ts.
 
@@ -12,17 +11,16 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
-import { MODE as REQRESP_MODE } from './livepeer/http-reqresp.js';
-import { MODE as STREAM_MODE } from './livepeer/http-stream.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp, dispatchStream, jobRefFromError } from '../loc/dispatch.js';
+import { dispatchReqresp, dispatchStream } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
   openReservation,
+  recordPaidJob,
   recordSelectedRoute,
-  refundReservation,
+  failReservation,
   type ReservationHandle,
 } from './reservation.js';
 import { bearerAuth } from './auth.js';
@@ -31,10 +29,6 @@ import { rateLimitV1 } from './rateLimit.js';
 interface ChatCompletionsBody {
   model?: unknown;
   stream?: boolean;
-  stream_options?: {
-    include_usage?: boolean;
-    [k: string]: unknown;
-  };
   [k: string]: unknown;
 }
 
@@ -69,29 +63,27 @@ export async function registerChatRoute(
         estimatedWorkUnits: estimatedChatWorkUnits(body),
       });
 
-      // Users request either the friendly model id (extra.openai.model)
-      // or a raw offering id. Resolve to the offering for the LOC job
-      // and the runner-facing serving name for the upstream body,
-      // preferring an offering whose advertised mode matches stream vs
-      // unary.
+      // The OpenAI model id is the LOC offering id. Resolve only the
+      // runner-facing serving name and verify the declared transport.
       const { offering, runnerModel } = await resolveRoute({
         catalog: deps.registryCatalog,
         modelMap: deps.config.locModelMap,
         capability,
         requestedModel,
-        interactionMode: isStream ? STREAM_MODE : REQRESP_MODE,
+        transport: isStream ? 'stream' : 'unary',
+        expectedWorkUnit: 'tokens',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
-      const dispatchBody = isStream ? withForcedUsageChunk(upstreamBody) : upstreamBody;
-      const bodyStr = JSON.stringify(dispatchBody);
-      const estimatedUnits = estimatedChatWorkUnits(body);
+      const bodyStr = JSON.stringify(upstreamBody);
+      const funding = chatFunding(body);
 
       if (isStream) {
         await runStreaming(deps, req, reply, {
           capability,
           offering,
-          estimatedUnits,
+          estimatedUnits: funding.estimatedUnits,
+          maxTotalUnits: funding.maxTotalUnits,
           bodyStr,
           requestId,
           handle,
@@ -105,18 +97,18 @@ export async function registerChatRoute(
           loc: deps.loc,
           capability,
           offering,
-          estimatedUnits,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          estimatedUnits: funding.estimatedUnits,
+          maxTotalUnits: funding.maxTotalUnits,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: bodyStr,
           contentType: 'application/json',
-          requestId,
+          idempotencyKey: handle.workId,
+          onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
-        const usage = parseTotalTokens(dispatched.result.body);
         await commitReservation(deps, handle, {
-          workUnits: usage,
+          workUnits: null,
           statusCode: dispatched.result.status,
-          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -126,10 +118,9 @@ export async function registerChatRoute(
       } catch (err) {
         const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
-        await refundReservation(deps, handle, {
+        await failReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
-          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
@@ -141,6 +132,7 @@ interface StreamingInput {
   capability: string;
   offering: string;
   estimatedUnits: number;
+  maxTotalUnits: number;
   bodyStr: string;
   requestId: string;
   handle: ReservationHandle;
@@ -159,18 +151,19 @@ async function runStreaming(
       capability: input.capability,
       offering: input.offering,
       estimatedUnits: input.estimatedUnits,
-      maxJobAttempts: deps.config.locJobRetries + 1,
+      maxTotalUnits: input.maxTotalUnits,
+      maxJobAttempts: deps.config.locOpenMaxAttempts,
       body: input.bodyStr,
       contentType: 'application/json',
-      requestId: input.requestId,
+      idempotencyKey: input.handle.workId,
+      onJobUpdate: (job, candidate) => recordPaidJob(deps, input.handle, job, candidate),
     });
   } catch (err) {
     const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
     if (candidate) await recordSelectedRoute(deps, input.handle, candidate);
-    await refundReservation(deps, input.handle, {
+    await failReservation(deps, input.handle, {
       statusCode: brokerStatus(err),
       errorText: (err as Error).message ?? 'unknown',
-      locJobId: jobRefFromError(err)?.jobId ?? null,
     });
     handleBrokerError(reply, err, input.requestId);
     return;
@@ -185,12 +178,10 @@ async function runStreaming(
   reply.raw.setHeader(HEADER.REQUEST_ID, input.requestId);
   reply.hijack();
 
-  const transcript: Buffer[] = [];
   let streamErr: unknown = null;
   try {
     for await (const chunk of dispatched.result.stream) {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      transcript.push(buf);
       reply.raw.write(buf);
     }
   } catch (err) {
@@ -206,23 +197,16 @@ async function runStreaming(
 
   if (streamErr) {
     req.log.warn({ err: streamErr, requestId: input.requestId }, 'chat stream ended with error');
-    // Mid-stream failure: the trailing usage frame never arrived, so
-    // actual units are unknowable. Settle the LOC job with 0 (full
-    // refund of the estimate); LOC's reconciliation janitor verifies
-    // against the daemon ledger out of band.
-    await refundReservation(deps, input.handle, {
+    await failReservation(deps, input.handle, {
       statusCode: dispatched.result.status,
       errorText: (streamErr as Error).message ?? 'stream_error',
-      locJobId: dispatched.jobRef.jobId,
     });
     return;
   }
 
-  const usage = parseStreamingUsage(Buffer.concat(transcript).toString('utf8'));
   await commitReservation(deps, input.handle, {
-    workUnits: usage,
+    workUnits: null,
     statusCode: dispatched.result.status,
-    locJobId: dispatched.jobRef.jobId,
   });
 }
 
@@ -232,57 +216,22 @@ export function pickModel(body: ChatCompletionsBody): string | null {
   return typeof body.model === 'string' && body.model.length > 0 ? body.model : null;
 }
 
-export function withForcedUsageChunk(body: ChatCompletionsBody): ChatCompletionsBody {
-  return {
-    ...body,
-    stream: true,
-    stream_options: { ...(body.stream_options ?? {}), include_usage: true },
-  };
-}
-
-export function parseTotalTokens(body: BodyInit | null): number | null {
-  // http-reqresp returns the broker body as an ArrayBuffer.
-  if (typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer)) {
-    return null;
-  }
-  try {
-    const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
-    const parsed = JSON.parse(text) as { usage?: { total_tokens?: number } };
-    const total = parsed?.usage?.total_tokens;
-    return typeof total === 'number' ? total : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Scan SSE transcript for the trailing usage frame. Last wins. */
-export function parseStreamingUsage(transcript: string): number | null {
-  let total: number | null = null;
-  // SSE events are blocks separated by blank lines; "data: " lines carry payloads.
-  for (const block of transcript.split(/\n\n+/)) {
-    for (const line of block.split('\n')) {
-      if (!line.startsWith('data: ')) continue;
-      const payload = line.slice(6).trim();
-      if (payload === '[DONE]') continue;
-      try {
-        const obj = JSON.parse(payload) as { usage?: { total_tokens?: number } };
-        if (typeof obj?.usage?.total_tokens === 'number') {
-          total = obj.usage.total_tokens;
-        }
-      } catch {
-        // ignore malformed line
-      }
-    }
-  }
-  return total;
-}
-
 function estimatedChatWorkUnits(body: ChatCompletionsBody): number {
+  return chatFunding(body).estimatedUnits;
+}
+
+export function chatFunding(body: ChatCompletionsBody): {
+  estimatedUnits: number;
+  maxTotalUnits: number;
+} {
   const promptTokens = estimateValueTokens(body.messages) + estimateValueTokens(body.input);
   const completionBudget = readPositiveInt(body.max_completion_tokens)
     ?? readPositiveInt(body.max_tokens)
     ?? 1024;
-  return Math.max(1, promptTokens + completionBudget);
+  return {
+    estimatedUnits: Math.max(1, promptTokens + Math.min(completionBudget, 256)),
+    maxTotalUnits: Math.max(1, promptTokens + completionBudget),
+  };
 }
 
 function estimateValueTokens(value: unknown): number {

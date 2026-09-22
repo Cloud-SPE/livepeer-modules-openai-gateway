@@ -7,6 +7,7 @@ import {
   bigint,
   integer,
   numeric,
+  jsonb,
   index,
   uniqueIndex,
   check,
@@ -14,12 +15,9 @@ import {
 
 import { apiKeys } from './apiKeys.js';
 
-// One row per /v1/* proxy request. Mirrors the same reservation model
-// even though v1 has no billing — the state machine stays for forward
-// compatibility (and so the admin UI can show ok/error/refunded outcomes).
-//
-// While billing is off: success → state='committed'; broker failure →
-// state='refunded'. reserved == committed == observed usage; no math.
+// One row per /v1/* proxy request. The open/committed/failed state is the
+// customer-visible gateway outcome used by admin reporting; it is deliberately
+// separate from broker evidence and LOC settlement state below.
 
 export const usageReservations = pgTable(
   'usage_reservations',
@@ -51,10 +49,46 @@ export const usageReservations = pgTable(
     state: text('state').notNull().default('open'),
 
     // ── LOC settlement (durable async) ────────────────────────────
-    // Written at commit/refund time; the background settler retries
-    // POST /v1/jobs/{loc_job_id}/settle until LOC acks (409
-    // job_already_settled counts as settled).
+    // Set to pending only after signed broker evidence is durable. The
+    // background settler retries POST /v1/jobs/{loc_job_id}/settle until
+    // LOC acks (409 job_already_settled counts as settled).
     locJobId: text('loc_job_id'),
+    // Five identities remain deliberately distinct. `workId` above is
+    // this gateway's operation id; these bind the LOC open, payment,
+    // and broker exchange records without guessing across namespaces.
+    locIdempotencyKey: text('loc_idempotency_key'),
+    locRequestId: text('loc_request_id'),
+    paymentWorkId: text('payment_work_id'),
+    brokerJobId: text('broker_job_id'),
+    jobProtocol: text('job_protocol'),
+    jobTransport: text('job_transport'),
+    settleEndpoint: text('settle_endpoint'),
+
+    // Broker settlement recovery. The encoded value is the exact
+    // Livepeer-Settlement wire claim; the JSON value is its decoded
+    // signed envelope for validation, support, and LOC submission.
+    settlementLookupState: text('settlement_lookup_state'),
+    settlementLookupAttempts: integer('settlement_lookup_attempts').notNull().default(0),
+    settlementLookupNextAt: timestamp('settlement_lookup_next_at', { withTimezone: true }),
+    settlementLookupUpdatedAt: timestamp('settlement_lookup_updated_at', { withTimezone: true }),
+    settlementLookupLastError: text('settlement_lookup_last_error'),
+    settlementEncoded: text('settlement_encoded'),
+    settlementEnvelope: jsonb('settlement_envelope').$type<Record<string, unknown>>(),
+    settlementCapturedAt: timestamp('settlement_captured_at', { withTimezone: true }),
+    terminalEvidenceType: text('terminal_evidence_type'),
+    terminalEvidenceEncoded: text('terminal_evidence_encoded'),
+
+    // These are separate authorities, not interchangeable billing
+    // estimates. Numeric strings retain the full uint64/uint256 range.
+    brokerActualUnits: numeric('broker_actual_units', { precision: 20, scale: 0 }),
+    brokerDebitedUnits: numeric('broker_debited_units', { precision: 20, scale: 0 }),
+    brokerBilledValueWei: numeric('broker_billed_value_wei', { precision: 78, scale: 0 }),
+    brokerSettlementOutcome: text('broker_settlement_outcome'),
+    gatewayObservedUnits: numeric('gateway_observed_units', { precision: 20, scale: 0 }),
+    gatewayObservationSource: text('gateway_observation_source'),
+    locSettledUnits: numeric('loc_settled_units', { precision: 20, scale: 0 }),
+    locBilledValueWei: numeric('loc_billed_value_wei', { precision: 78, scale: 0 }),
+    locSettlementOutcome: text('loc_settlement_outcome'),
     settleState: text('settle_state'), // NULL | 'pending' | 'settled' | 'failed'
     settleActualUnits: bigint('settle_actual_units', { mode: 'number' }),
     settleOutcome: text('settle_outcome'),
@@ -93,9 +127,31 @@ export const usageReservations = pgTable(
     settlePendingIdx: index('idx_usage_reservations_settle_pending')
       .on(t.settleState)
       .where(sql`${t.settleState} = 'pending'`),
+    settlementLookupPendingIdx: index('idx_usage_reservations_settlement_lookup_pending')
+      .on(t.settlementLookupNextAt)
+      .where(sql`${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight')`),
+    locIdempotencyKeyIdx: uniqueIndex('idx_usage_reservations_loc_idempotency_key')
+      .on(t.locIdempotencyKey),
+    locRequestIdIdx: uniqueIndex('idx_usage_reservations_loc_request_id').on(t.locRequestId),
     stateCheck: check(
       'usage_reservations_state_check',
-      sql`${t.state} IN ('open', 'committed', 'refunded')`,
+      sql`${t.state} IN ('open', 'committed', 'failed')`,
+    ),
+    protocolCheck: check(
+      'usage_reservations_job_protocol_check',
+      sql`${t.jobProtocol} IS NULL OR ${t.jobProtocol} = 'paid-job/v1'`,
+    ),
+    transportCheck: check(
+      'usage_reservations_job_transport_check',
+      sql`${t.jobTransport} IS NULL OR ${t.jobTransport} IN ('unary', 'stream', 'multipart')`,
+    ),
+    lookupStateCheck: check(
+      'usage_reservations_settlement_lookup_state_check',
+      sql`${t.settlementLookupState} IS NULL OR ${t.settlementLookupState} IN ('pending', 'accounting_pending', 'in_flight', 'ready', 'not_admitted', 'no_record', 'outcome_unknown', 'evidence_expired', 'failed')`,
+    ),
+    terminalEvidenceTypeCheck: check(
+      'usage_reservations_terminal_evidence_type_check',
+      sql`${t.terminalEvidenceType} IS NULL OR ${t.terminalEvidenceType} IN ('not_admitted', 'outcome_unknown', 'evidence_expired', 'debit_failed')`,
     ),
   }),
 );

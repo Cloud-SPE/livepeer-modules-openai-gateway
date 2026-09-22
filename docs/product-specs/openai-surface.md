@@ -116,9 +116,8 @@ a bug, not a deliberate gap.
 - **Stripe metadata in errors** (`error.code: rate_limit_exceeded`
   matches, but we don't carry headers like
   `X-RateLimit-Remaining`).
-- **`stream_options` other than `include_usage`.** We accept and
-  forward whatever the client sends, but only `include_usage`
-  affects our settlement.
+- **Gateway interpretation of `stream_options`.** The object is forwarded
+  unchanged. No response-body field affects network settlement.
 - **Idempotency-Key header.** Duplicate POSTs create duplicate
   upstream work.
 - **Per-model latency / token-rate guarantees.** Performance reflects
@@ -133,8 +132,8 @@ a bug, not a deliberate gap.
 |---|---|
 | Client requests a model that no registry candidate advertises | Route selection fails before broker dispatch and returns an API error for no route candidates. |
 | Client requests `model: ""` or no model field | `400 invalid_request_error` for missing `model`. |
-| Streaming mid-flight broker failure | SSE stream terminates from the client's perspective; reservation is `refunded`. No retry, by design (see streaming-usage.md). |
-| Client cancels mid-stream | `reply.raw.end()` from the loop; reservation is `committed` if usage parsed, else `committed` with null work units. |
+| Streaming mid-flight broker failure | SSE terminates and the customer-visible request outcome is `failed`. The original paid job is never retried; signed settlement recovery continues independently. `failed` does not mean financially refunded. |
+| Client cancels mid-stream | The gateway never creates replacement work. Broker-signed settlement recovery continues for the admitted job independently of the client socket. |
 
 ## Implementation reference
 

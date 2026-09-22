@@ -13,7 +13,8 @@ export interface ActiveModelHealth {
   reason: string | null;
   routeCount: number;
   offerings: string[];
-  interactionModes: string[];
+  protocol: string;
+  transports: string[];
   extra: Record<string, unknown> | null;
   snapshotAt: Date;
 }
@@ -26,11 +27,9 @@ export async function loadActiveModelHealth(
     modelsRepo.listActive(db),
     registryCatalog.inspect(),
   ]);
-  const liveIndex = indexCandidates(liveCandidates);
 
   return rows.map((row) => {
-    const key = modelKey(row.capability, row.modelId);
-    const matches = liveIndex.get(key) ?? [];
+    const matches = candidatesForModel(liveCandidates, row.capability, row.modelId);
     return {
       id: row.modelId,
       capability: row.capability,
@@ -42,32 +41,23 @@ export async function loadActiveModelHealth(
       reason: matches.length > 0 ? null : 'no_routes',
       routeCount: matches.length,
       offerings: uniq(matches.map((candidate) => candidate.offering)),
-      interactionModes: uniq(
-        matches
-          .map((candidate) => candidate.interactionMode)
-          .filter((mode): mode is string => typeof mode === 'string' && mode.length > 0),
-      ),
+      protocol: row.protocol,
+      transports: uniq(matches.flatMap((candidate) => candidate.transports)),
       extra: isJsonObject(row.extraJson) ? row.extraJson : null,
       snapshotAt: row.snapshotAt,
     };
   });
 }
 
-function indexCandidates(candidates: RouteCandidate[]): Map<string, RouteCandidate[]> {
-  const out = new Map<string, RouteCandidate[]>();
-  for (const candidate of candidates) {
-    const model = (candidate.model ?? candidate.offering)?.trim();
-    if (!model) continue;
-    const key = modelKey(candidate.capability, model);
-    const bucket = out.get(key) ?? [];
-    bucket.push(candidate);
-    out.set(key, bucket);
-  }
-  return out;
-}
-
-function modelKey(capability: string, modelId: string): string {
-  return `${capability}\u0000${modelId}`;
+export function candidatesForModel(
+  candidates: RouteCandidate[],
+  capability: string,
+  offering: string,
+): RouteCandidate[] {
+  return candidates.filter(
+    (candidate) =>
+      candidate.capability === capability && candidate.offering.trim() === offering,
+  );
 }
 
 function uniq(values: string[]): string[] {

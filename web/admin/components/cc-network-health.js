@@ -57,12 +57,12 @@ class CcNetworkHealth extends LitElement {
       </div>
 
       <div class="card">
-        <h2>Models ${helpTip('Modes are transport shapes. Offerings are clearinghouse-facing route keys, which may differ from the user-facing model id.')}</h2>
+        <h2>Models ${helpTip('A paid-job offering declares one or more HTTP transports.')}</h2>
         ${models.length === 0
           ? html`<p class="msg">No model health data.</p>`
           : html`<table>
               <thead>
-                <tr><th>Model</th><th>Category</th><th>Status</th><th>Routes</th><th>Modes</th><th>Offerings</th><th>Reason</th><th>Snapshot</th></tr>
+                <tr><th>Model</th><th>Category</th><th>Status</th><th>Routes</th><th>Transports</th><th>Offerings</th><th>Reason</th><th>Snapshot</th></tr>
               </thead>
               <tbody>
                 ${models.map((model) => html`
@@ -78,7 +78,7 @@ class CcNetworkHealth extends LitElement {
                       </span>
                     </td>
                     <td>${model.routeCount}</td>
-                    <td>${model.interactionModes?.length ? model.interactionModes.join(', ') : '—'}</td>
+                    <td>${model.transports?.length ? model.transports.join(', ') : '—'}</td>
                     <td>${model.offerings?.length ? model.offerings.join(', ') : '—'}</td>
                     <td>${model.reason ?? '—'}</td>
                     <td>${new Date(model.snapshotAt).toLocaleString()}</td>

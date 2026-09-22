@@ -89,7 +89,7 @@ plan — it's cheap.
 - **Validate at the boundary.** zod schemas at every HTTP entry
   point + every env-var read.
 - **Tests at the load-bearing seams.** `gateway/test/` covers pure
-  helpers (`crypto.ts`, the chat streaming-usage parser, the registry
+  helpers (`crypto.ts`, paid-job evidence validation, the registry
   refresh row-mapping). Adding code in those areas? Extend the tests.
 - **No comments that just restate the code.** Comments earn their
   keep by explaining *why* something is non-obvious — a constraint,
@@ -99,14 +99,10 @@ plan — it's cheap.
 
 ## Things to leave alone
 
-- **`gateway/src/proxy/livepeer/`**. This is a verbatim copy of
-  load-bearing wire mechanics (the http-reqresp / http-stream /
-  http-multipart broker dispatch + streaming-usage parsing) from the
-  upstream `livepeer-network-modules/openai-gateway` repo. It's copied
-  not because it's frozen, but because divergence is expensive — every
-  change makes future syncs harder. If you need to change it, write an
-  exec plan first and explain why. (The LOC client in
-  `gateway/src/loc/` is hand-written and not subject to this rule.)
+- **`gateway/src/proxy/livepeer/`**. These are the paid-job HTTP transport
+  adapters. Changes must preserve `/v1/job`, protocol, idempotency, and signed
+  evidence invariants and should include contract tests. The LOC client in
+  `gateway/src/loc/` owns clearinghouse-specific behavior.
 - **The Livepeer wire spec.** Owned by `livepeer-network-protocol`
   upstream, not here.
 

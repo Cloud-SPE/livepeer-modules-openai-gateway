@@ -10,7 +10,8 @@ function candidate(overrides: Partial<RouteCandidate>): RouteCandidate {
     capability: 'openai:chat-completions',
     offering: 'offering-id',
     model: null,
-    interactionMode: null,
+    protocol: 'paid-job/v1',
+    transports: ['unary'],
     ethAddress: '',
     pricePerWorkUnitWei: '0',
     workUnit: 'tokens',
@@ -29,40 +30,34 @@ function catalogOf(candidates: RouteCandidate[]): RegistryCatalog {
   return { inspect: async () => candidates };
 }
 
-const QWEN_DEFAULT = candidate({
-  offering: 'vllm-qwen3.6-27b-default',
+const QWEN = candidate({
+  offering: 'vllm-qwen3.6-27b',
   model: 'Qwen3.6-27B',
-  interactionMode: 'http-reqresp@v0',
-  extra: { interaction_mode: 'http-reqresp@v0', openai: { model: 'Qwen3.6-27B' } },
+  transports: ['unary', 'stream'],
+  extra: { openai: { model: 'Qwen3.6-27B' } },
 });
 
-const QWEN_STREAM = candidate({
-  offering: 'vllm-qwen3.6-27b-stream',
-  model: 'Qwen3.6-27B',
-  interactionMode: 'http-stream@v0',
-  extra: { interaction_mode: 'http-stream@v0', openai: { model: 'Qwen3.6-27B' } },
-});
-
-test('friendly model id resolves to mode-matching offering + runner name', async () => {
+test('offering id resolves for a declared transport and runner name', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT, QWEN_STREAM]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:chat-completions',
-    requestedModel: 'Qwen3.6-27B',
-    interactionMode: 'http-stream@v0',
+    requestedModel: 'vllm-qwen3.6-27b',
+    transport: 'stream',
   });
-  assert.equal(resolved.offering, 'vllm-qwen3.6-27b-stream');
+  assert.equal(resolved.offering, 'vllm-qwen3.6-27b');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');
 });
 
 test('offering id resolves to runner name from extra', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT, QWEN_STREAM]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:chat-completions',
-    requestedModel: 'vllm-qwen3.6-27b-default',
+    requestedModel: 'vllm-qwen3.6-27b',
+    transport: 'unary',
   });
-  assert.equal(resolved.offering, 'vllm-qwen3.6-27b-default');
+  assert.equal(resolved.offering, 'vllm-qwen3.6-27b');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');
 });
 
@@ -73,6 +68,7 @@ test('no extra metadata: falls back to operator model map', async () => {
     modelMap: { 'legacy-offering': 'Mapped/Name' },
     capability: 'openai:chat-completions',
     requestedModel: 'legacy-offering',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'legacy-offering');
   assert.equal(resolved.runnerModel, 'Mapped/Name');
@@ -80,10 +76,11 @@ test('no extra metadata: falls back to operator model map', async () => {
 
 test('unknown model passes through unchanged (LOC will 404 the job)', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:chat-completions',
     requestedModel: 'no-such-model',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'no-such-model');
   assert.equal(resolved.runnerModel, 'no-such-model');
@@ -100,6 +97,7 @@ test('catalog failure degrades to map/identity', async () => {
     modelMap: { 'an-offering': 'Runner/Name' },
     capability: 'openai:chat-completions',
     requestedModel: 'an-offering',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'an-offering');
   assert.equal(resolved.runnerModel, 'Runner/Name');
@@ -107,11 +105,118 @@ test('catalog failure degrades to map/identity', async () => {
 
 test('capability mismatch is not resolved across capabilities', async () => {
   const resolved = await resolveRoute({
-    catalog: catalogOf([QWEN_DEFAULT]),
+    catalog: catalogOf([QWEN]),
     modelMap: {},
     capability: 'openai:embeddings',
     requestedModel: 'Qwen3.6-27B',
+    transport: 'unary',
   });
   assert.equal(resolved.offering, 'Qwen3.6-27B');
   assert.equal(resolved.runnerModel, 'Qwen3.6-27B');
+});
+
+test('declared endpoint work-unit drift is rejected before LOC open', async () => {
+  await assert.rejects(
+    resolveRoute({
+      catalog: catalogOf([candidate({ workUnit: 'characters' })]),
+      modelMap: {},
+      capability: 'openai:chat-completions',
+      requestedModel: 'offering-id',
+      transport: 'unary',
+      expectedWorkUnit: 'tokens',
+    }),
+    /uses work unit characters; expected tokens/,
+  );
+});
+
+const AUDIO_ESTIMATOR = {
+  id: 'multipart-audio-duration/v1',
+  rounding: 'ceil-to-whole-seconds',
+  exactness: 'exact-or-reject',
+  fixtures: 'livepeer-network-protocol/extractors/fixtures/multipart-audio-duration-v1',
+};
+
+test('transcription funding requires the exact advertised estimator contract', async () => {
+  const audio = candidate({
+    capability: 'openai:audio-transcriptions',
+    offering: 'default',
+    transports: ['multipart'],
+    workUnit: 'seconds',
+    estimator: AUDIO_ESTIMATOR,
+  });
+  const resolved = await resolveRoute({
+    catalog: catalogOf([audio]),
+    modelMap: {},
+    capability: 'openai:audio-transcriptions',
+    requestedModel: 'default',
+    transport: 'multipart',
+    expectedWorkUnit: 'seconds',
+    expectedEstimator: AUDIO_ESTIMATOR,
+  });
+  assert.equal(resolved.offering, 'default');
+});
+
+test('estimator fixture location is informational rather than an implementation dependency', async () => {
+  const audio = candidate({
+    capability: 'openai:audio-transcriptions',
+    offering: 'default',
+    transports: ['multipart'],
+    workUnit: 'seconds',
+    estimator: {
+      ...AUDIO_ESTIMATOR,
+      fixtures: 'broker-informational-fixture-location',
+    },
+  });
+  const resolved = await resolveRoute({
+    catalog: catalogOf([audio]),
+    modelMap: {},
+    capability: 'openai:audio-transcriptions',
+    requestedModel: 'default',
+    transport: 'multipart',
+    expectedWorkUnit: 'seconds',
+    expectedEstimator: {
+      id: AUDIO_ESTIMATOR.id,
+      rounding: AUDIO_ESTIMATOR.rounding,
+      exactness: AUDIO_ESTIMATOR.exactness,
+    },
+  });
+  assert.equal(resolved.offering, 'default');
+});
+
+test('transcription funding fails closed when LOC drops or changes the estimator', async () => {
+  for (const estimator of [undefined, { ...AUDIO_ESTIMATOR, id: 'unknown/v2' }]) {
+    await assert.rejects(
+      resolveRoute({
+        catalog: catalogOf([candidate({
+          capability: 'openai:audio-transcriptions',
+          offering: 'default',
+          transports: ['multipart'],
+          workUnit: 'seconds',
+          ...(estimator ? { estimator } : {}),
+        })]),
+        modelMap: {},
+        capability: 'openai:audio-transcriptions',
+        requestedModel: 'default',
+        transport: 'multipart',
+        expectedWorkUnit: 'seconds',
+        expectedEstimator: AUDIO_ESTIMATOR,
+      }),
+      /does not advertise the required multipart-audio-duration\/v1 estimator contract/,
+    );
+  }
+});
+
+test('transcription funding fails closed when the LOC catalog is unavailable', async () => {
+  await assert.rejects(
+    resolveRoute({
+      catalog: { inspect: async () => { throw new Error('LOC down'); } },
+      modelMap: {},
+      capability: 'openai:audio-transcriptions',
+      requestedModel: 'default',
+      transport: 'multipart',
+      expectedWorkUnit: 'seconds',
+      expectedEstimator: AUDIO_ESTIMATOR,
+    }),
+    /cannot be funded without catalog estimator metadata/,
+  );
 });

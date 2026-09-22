@@ -69,11 +69,11 @@ courtesy, not a product."
 - Creating a key shows the plaintext exactly once, in a
   `user-select: all` block; refreshing the page hides it forever.
 - The health view stays user-friendly: it shows capability/model
-  availability, route counts, and interaction modes without exposing
+  availability, route counts, and HTTP transports without exposing
   full admin debug detail.
 - Ambiguous portal diagnostics include inline help affordances so a
-  user can understand terms like `selectable`, `cached`, interaction
-  modes, and route details without leaving the page.
+  user can understand terms like `selectable`, `cached`, transports,
+  and route details without leaving the page.
 - The playground only enables tabs when there is at least one live
   selectable model for that capability in the current LOC-backed
   catalog.
@@ -81,7 +81,7 @@ courtesy, not a product."
   metadata when available and falls back to free-text input when a
   model does not advertise a voice list.
 - The usage view shows at least: timestamp, capability, model,
-  state pill (committed/refunded/open), work units, status, latency.
+  state pill (committed/failed/open), work units, status, latency.
 - Route/quote details in usage are readable without distorting the
   table layout: they open in a dismissible modal rather than inline.
 - The usage API also carries the selected route/quote metadata for each

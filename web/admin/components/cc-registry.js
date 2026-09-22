@@ -84,7 +84,7 @@ class CcRegistry extends LitElement {
           ? html`<p class="msg">No candidates from the LOC.</p>`
           : html`<table>
               <thead>
-                <tr><th>Capability</th><th>Model</th><th>Mode</th><th>Broker</th><th>Price</th><th>Quote</th></tr>
+                <tr><th>Capability</th><th>Model</th><th>Protocol / transports</th><th>Broker</th><th>Price</th><th>Quote</th></tr>
               </thead>
               <tbody>
                 ${this.candidates.map(
@@ -97,7 +97,7 @@ class CcRegistry extends LitElement {
                       <code>${c.model ?? c.offering}</code>
                       <div class="msg compact">${c.offering}</div>
                     </td>
-                    <td>${c.interactionMode ?? html`<span class="msg">—</span>`}</td>
+                    <td><code>${c.protocol}</code><div class="msg compact">${c.transports?.join(', ') ?? '—'}</div></td>
                     <td>
                       <div><code>${shrink(c.brokerUrl)}</code></div>
                       <div class="msg compact"><code>${shrink(c.ethAddress)}</code></div>
@@ -153,7 +153,7 @@ class CcRegistry extends LitElement {
                   (m) => html`<tr>
                     <td>
                       <code>${m.modelId}</code>
-                      ${m.interactionMode ? html`<div class="msg compact">${m.interactionMode}</div>` : ''}
+                      <div class="msg compact">${m.protocol} · ${m.transports?.join(', ') ?? '—'}</div>
                     </td>
                     <td><code>${m.capability}</code></td>
                     <td>

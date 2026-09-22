@@ -43,8 +43,8 @@ const ConfigSchema = z.object({
   locApiKey: z.string().min(1),
   locTimeoutMs: z.coerce.number().int().positive().default(30000),
   locSettleIntervalMs: z.coerce.number().int().positive().default(15000),
-  locSettleMaxAttempts: z.coerce.number().int().positive().default(20),
-  locJobRetries: z.coerce.number().int().nonnegative().default(2),
+  locSettleAlertAttempts: z.coerce.number().int().positive().default(20),
+  locOpenMaxAttempts: z.coerce.number().int().positive().default(3),
   /** Offering id → runner-facing model name. The LOC offering id selects
    * the route, but brokers forward the JSON body verbatim to the runner,
    * which only accepts its own serving name (e.g. vLLM's model id).
@@ -99,8 +99,8 @@ export function loadConfig(): Config {
     locApiKey: process.env['LOC_API_KEY'],
     locTimeoutMs: process.env['LOC_TIMEOUT_MS'],
     locSettleIntervalMs: process.env['LOC_SETTLE_INTERVAL_MS'],
-    locSettleMaxAttempts: process.env['LOC_SETTLE_MAX_ATTEMPTS'],
-    locJobRetries: process.env['LOC_JOB_RETRIES'],
+    locSettleAlertAttempts: process.env['LOC_SETTLE_ALERT_ATTEMPTS'],
+    locOpenMaxAttempts: process.env['LOC_OPEN_MAX_ATTEMPTS'],
     locModelMap: parseJsonEnv('LOC_MODEL_MAP'),
     brokerCallTimeoutMs: process.env['BROKER_CALL_TIMEOUT_MS'],
     registryRefreshIntervalMs: process.env['REGISTRY_REFRESH_INTERVAL_MS'],

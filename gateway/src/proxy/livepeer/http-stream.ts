@@ -1,9 +1,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
-import { HEADER, SPEC_VERSION } from "./headers.js";
+import { HEADER, PAID_JOB_PROTOCOL } from "./headers.js";
 import { errorFromResponse } from "./errors.js";
-
-export const MODE = "http-stream@v0";
 
 export interface SendOpts {
   brokerUrl: string;
@@ -12,7 +10,7 @@ export interface SendOpts {
   paymentBlob: string;
   body: string | Buffer | null;
   contentType?: string;
-  requestId?: string;
+  requestId: string;
   signal?: AbortSignal;
 }
 
@@ -22,12 +20,16 @@ export interface SendResult {
   headers: Record<string, string | string[] | undefined>;
   trailers: Record<string, string>;
   workUnits: number;
+  workUnit: string | undefined;
+  jobId: string | undefined;
   requestId: string | undefined;
 }
 
 export interface StreamHandle {
   status: number;
   headers: Record<string, string | string[] | undefined>;
+  workUnit: string | undefined;
+  jobId: string | undefined;
   requestId: string | undefined;
   /** Live broker response stream. The route pipes this to the customer
    * reply unbuffered so first-token latency tracks the runner. */
@@ -41,14 +43,13 @@ export function send(opts: SendOpts): Promise<SendResult> {
     [HEADER.CAPABILITY]: opts.capability,
     [HEADER.OFFERING]: opts.offering,
     [HEADER.PAYMENT]: opts.paymentBlob,
-    [HEADER.SPEC_VERSION]: SPEC_VERSION,
-    [HEADER.MODE]: MODE,
+    [HEADER.PROTOCOL]: PAID_JOB_PROTOCOL,
+    [HEADER.REQUEST_ID]: opts.requestId,
     Accept: "text/event-stream",
   };
-  if (opts.requestId) requestHeaders[HEADER.REQUEST_ID] = opts.requestId;
   if (opts.contentType) requestHeaders["Content-Type"] = opts.contentType;
 
-  const url = new URL("/v1/cap", opts.brokerUrl);
+  const url = new URL("/v1/job", opts.brokerUrl);
   const isHttps = url.protocol === "https:";
   const transport = isHttps ? https : http;
 
@@ -74,6 +75,8 @@ export function send(opts: SendOpts): Promise<SendResult> {
 
           const requestIdRaw = resp.headers[HEADER.REQUEST_ID.toLowerCase()];
           const requestId = Array.isArray(requestIdRaw) ? requestIdRaw[0] : requestIdRaw;
+          const workUnit = firstHeader(resp.headers, HEADER.WORK_UNIT);
+          const jobId = firstHeader(resp.headers, HEADER.JOB_ID);
 
           const status = resp.statusCode ?? 0;
           if (status >= 400) {
@@ -94,6 +97,8 @@ export function send(opts: SendOpts): Promise<SendResult> {
             headers: resp.headers,
             trailers: trailerMap,
             workUnits,
+            workUnit,
+            jobId,
             requestId,
           });
         });
@@ -115,14 +120,13 @@ export function sendStreaming(opts: SendOpts): Promise<StreamHandle> {
     [HEADER.CAPABILITY]: opts.capability,
     [HEADER.OFFERING]: opts.offering,
     [HEADER.PAYMENT]: opts.paymentBlob,
-    [HEADER.SPEC_VERSION]: SPEC_VERSION,
-    [HEADER.MODE]: MODE,
+    [HEADER.PROTOCOL]: PAID_JOB_PROTOCOL,
+    [HEADER.REQUEST_ID]: opts.requestId,
     Accept: "text/event-stream",
   };
-  if (opts.requestId) requestHeaders[HEADER.REQUEST_ID] = opts.requestId;
   if (opts.contentType) requestHeaders["Content-Type"] = opts.contentType;
 
-  const url = new URL("/v1/cap", opts.brokerUrl);
+  const url = new URL("/v1/job", opts.brokerUrl);
   const isHttps = url.protocol === "https:";
   const transport = isHttps ? https : http;
 
@@ -140,6 +144,8 @@ export function sendStreaming(opts: SendOpts): Promise<StreamHandle> {
         const status = resp.statusCode ?? 0;
         const requestIdRaw = resp.headers[HEADER.REQUEST_ID.toLowerCase()];
         const requestId = Array.isArray(requestIdRaw) ? requestIdRaw[0] : requestIdRaw;
+        const workUnit = firstHeader(resp.headers, HEADER.WORK_UNIT);
+        const jobId = firstHeader(resp.headers, HEADER.JOB_ID);
 
         if (status >= 400) {
           const errorChunks: Buffer[] = [];
@@ -174,11 +180,19 @@ export function sendStreaming(opts: SendOpts): Promise<StreamHandle> {
             resp.once("error", rej);
           });
 
-        resolve({ status, headers: resp.headers, requestId, stream: resp, done });
+        resolve({ status, headers: resp.headers, workUnit, jobId, requestId, stream: resp, done });
       },
     );
     req.on("error", reject);
     if (opts.body !== null && opts.body !== undefined) req.write(opts.body);
     req.end();
   });
+}
+
+function firstHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const value = headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
 }

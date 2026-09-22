@@ -10,6 +10,7 @@
 // yourself.
 
 import type { FastifyBaseLogger } from 'fastify';
+import { Resend } from 'resend';
 
 export interface EmailClient {
   readonly enabled: boolean;
@@ -35,15 +36,17 @@ export interface CreateEmailClientInput {
   apiKey: string | undefined;
   fromEmail: string;
   log: FastifyBaseLogger | Console;
-  /** Override the Resend endpoint for tests. */
+  /** Resend-compatible API origin. The SDK appends `/emails`. */
   baseUrl?: string;
 }
 
-const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+const RESEND_BASE_URL = 'https://api.resend.com';
 
 export function createEmailClient(input: CreateEmailClientInput): EmailClient {
   const enabled = !!input.apiKey;
-  const endpoint = input.baseUrl ?? RESEND_ENDPOINT;
+  const resend = enabled
+    ? new Resend(input.apiKey, { baseUrl: trimTrailingSlash(input.baseUrl ?? RESEND_BASE_URL) })
+    : null;
   const fromEmail = input.fromEmail;
   const log = input.log;
 
@@ -60,25 +63,15 @@ export function createEmailClient(input: CreateEmailClientInput): EmailClient {
       );
       return;
     }
-    const resp = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${input.apiKey!}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: payload.to,
-        subject: payload.subject,
-        html: payload.html,
-        text: payload.text,
-      }),
+    const result = await resend!.emails.send({
+      from: fromEmail,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
     });
-    if (!resp.ok) {
-      const body = await safeReadText(resp);
-      throw new Error(
-        `Resend send failed: ${resp.status} ${resp.statusText}: ${body}`,
-      );
+    if (result.error) {
+      throw new Error(`Resend send failed: ${result.error.message}`);
     }
   }
 
@@ -104,14 +97,6 @@ export function createEmailClient(input: CreateEmailClientInput): EmailClient {
       });
     },
   };
-}
-
-async function safeReadText(resp: Response): Promise<string> {
-  try {
-    return await resp.text();
-  } catch {
-    return '<unreadable body>';
-  }
 }
 
 function trimTrailingSlash(s: string): string {

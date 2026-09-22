@@ -5,7 +5,7 @@
 #   - gateway   (build from ./gateway/Dockerfile)
 #
 # Route selection + payment minting are delegated to the LOC
-# (Livepeer Open Clearinghouse) over HTTPS — no daemon sidecars or
+# (Livepeer Open Clearinghouse) over HTTP — no daemon sidecars or
 # unix-socket volumes. Set LOC_BASE_URL + LOC_API_KEY in .env.
 #
 # Capability workers are external to this repository and compose stack.
@@ -24,33 +24,41 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres-dev-password}
     volumes:
       - openai-service-pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-65432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openai_service}"]
       interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
+    restart: "no"
   gateway:
     build:
       context: .
       dockerfile: gateway/Dockerfile
-    image: openai-service-gateway:${GATEWAY_TAG:-v1.4.1}
+      args:
+        APP_VERSION: "2.0.0"
+        VCS_REF: ${GATEWAY_VCS_REF:-local}
+    image: openai-service-gateway:${GATEWAY_TAG:-v2.0.0}
     container_name: openai-service-gateway
     depends_on:
       db:
         condition: service_healthy
+    # LOC returns a localhost broker URL for the pilot. Host networking is
+    # required so 127.0.0.1:8411 resolves to that broker, not this container.
+    network_mode: host
     environment:
       # ── server ──
       PORT: "4001"
-      HOST: "0.0.0.0"
-      BASE_URL: ${BASE_URL:-http://localhost:4001}
-      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:4001}
-      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://localhost:4001/portal/}
+      HOST: "127.0.0.1"
+      BASE_URL: ${BASE_URL:-http://127.0.0.1:4001}
+      PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://127.0.0.1:4001}
+      PUBLIC_PORTAL_URL: ${PUBLIC_PORTAL_URL:-http://127.0.0.1:4001/portal/}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
       # ── data ──
-      DATABASE_URL: postgres://${POSTGRES_USER:-openai_service}:${POSTGRES_PASSWORD:-postgres-dev-password}@db:5432/${POSTGRES_DB:-openai_service}
+      DATABASE_URL: postgres://${POSTGRES_USER:-openai_service}:${POSTGRES_PASSWORD:-postgres-dev-password}@127.0.0.1:${POSTGRES_HOST_PORT:-65432}/${POSTGRES_DB:-openai_service}
 
       # ── SaaS shell auth ──
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
@@ -61,25 +69,23 @@ services:
 
       # ── email (optional) ──
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_BASE_URL: ${RESEND_BASE_URL:-https://api.resend.com/emails}
+      RESEND_BASE_URL: ${RESEND_BASE_URL:-https://api.resend.com}
       FROM_EMAIL: ${FROM_EMAIL:-OpenAI Service <noreply@example.com>}
 
       # ── LOC clearinghouse ──
-      LOC_BASE_URL: ${LOC_BASE_URL:-https://loc.cloudspe.com}
+      LOC_BASE_URL: ${LOC_BASE_URL:-http://127.0.0.1:8088}
       LOC_API_KEY: ${LOC_API_KEY:-}
       LOC_TIMEOUT_MS: ${LOC_TIMEOUT_MS:-30000}
       LOC_SETTLE_INTERVAL_MS: ${LOC_SETTLE_INTERVAL_MS:-15000}
-      LOC_SETTLE_MAX_ATTEMPTS: ${LOC_SETTLE_MAX_ATTEMPTS:-20}
-      LOC_JOB_RETRIES: ${LOC_JOB_RETRIES:-2}
+      LOC_SETTLE_ALERT_ATTEMPTS: ${LOC_SETTLE_ALERT_ATTEMPTS:-20}
+      LOC_OPEN_MAX_ATTEMPTS: ${LOC_OPEN_MAX_ATTEMPTS:-3}
       LOC_MODEL_MAP: ${LOC_MODEL_MAP:-{}}
       REGISTRY_REFRESH_INTERVAL_MS: ${REGISTRY_REFRESH_INTERVAL_MS:-60000}
 
       # ── /v1/* rate limit ──
       V1_RATE_LIMIT_PER_MINUTE: ${V1_RATE_LIMIT_PER_MINUTE:-60}
       V1_RATE_LIMIT_BURST: ${V1_RATE_LIMIT_BURST:-30}
-    ports:
-      - "${GATEWAY_HOST_PORT:-4001}:4001"
-    restart: unless-stopped
+    restart: "no"
 
 volumes:
   openai-service-pgdata:

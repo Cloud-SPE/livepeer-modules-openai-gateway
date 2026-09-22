@@ -1,0 +1,15 @@
+*
+
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!gateway/
+!gateway/**
+!web/
+!web/**
+
+gateway/node_modules/
+gateway/dist/
+gateway/dist-test/
+gateway/*.tsbuildinfo
+web/**/node_modules/

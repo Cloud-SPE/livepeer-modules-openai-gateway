@@ -23,11 +23,11 @@ response verbatim. Actual usage is settled back to the LOC afterwards.
 | # | Layer | What it does |
 |---|---|---|
 | 1 | OpenAI surface | `/v1/chat/completions`, `/v1/embeddings`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/rerank`. Streaming where applicable. |
-| 2 | Wire translation | OpenAI request → `Livepeer-Capability` header + mode (`http-reqresp@v0` / `http-stream@v0` / `http-multipart@v0`). All in `gateway/src/proxy/livepeer/`. |
-| 3 | Route selection + payment | `POST /v1/jobs` to the LOC returns a single route (`broker_url`, `mode`) AND the `payment_envelope` in one call. The LOC owns selection and mints the PM ticket; the gateway forwards the envelope in the `Livepeer-Payment` header. `gateway/src/loc/`. |
-| 4 | Settlement | The gateway charges the LOC credit balance the full estimate at issuance, then a durable background settler reports actual units so the LOC refunds the unused part. Customers pay nothing in v1; the operator pays the network via the LOC. |
+| 2 | Wire translation | OpenAI request → `POST /v1/job` with `Livepeer-Protocol: paid-job/v1`; ordinary HTTP selects unary, stream, or multipart transport. |
+| 3 | Route selection + payment | Idempotent `POST /v1/jobs` to LOC returns one route, stable request identity, work unit, funded envelope, and settlement endpoint. |
+| 4 | Settlement | A broker-signed claim is retrieved independently of the response body, stored durably, and submitted to LOC. Estimates only bound funding. |
 | 5 | SaaS shell | Postgres-backed waitlist + email-verify + admin-approval + API-key issuance. Cookie sessions for the portal UI. `ADMIN_TOKEN` env var bootstraps admin access. |
-| 6 | Usage tracking | Per-request reservations are opened, then committed or refunded; the same write enqueues a durable settle intent for visibility and future billing evolution. |
+| 6 | Evidence and settlement | Customer outcomes, broker claims, and LOC settlement are recorded separately; only a persisted signed broker claim can enter the durable settlement queue. |
 
 ## What this gateway does NOT do (v1)
 
@@ -50,27 +50,24 @@ livepeer-modules-openai/
 
 External (not in this repo, not in compose):
 
-- **LOC — Livepeer Open Clearinghouse** (`https://loc.cloudspe.com`),
-  reached over HTTPS with an `X-API-Key` header.
+- **LOC — Livepeer Open Clearinghouse**, run from its sibling checkout for
+  localhost integration and reached with an `X-API-Key` header.
 
-## Charge-at-issuance + durable async settlement
+## Funded ceiling + durable signed settlement
 
-The LOC charges the operator's credit balance the **full estimate** when
-the job is issued (`POST /v1/jobs`). After the response — success or
-failure — the gateway records the actual units and a durable settle
-intent (`usage_reservations.settle_state='pending'`). A background
-settler (`gateway/src/loc/settler.ts`, every `LOC_SETTLE_INTERVAL_MS`,
-up to `LOC_SETTLE_MAX_ATTEMPTS`) calls `POST /v1/jobs/{id}/settle`, which
-**refunds the unused part of the estimate**. Failed broker attempts
-settle with 0 units (full refund). `409 job_already_settled` and
-`404 job_not_found` are terminal successes (idempotent).
+LOC reserves the request's funded ceiling at `POST /v1/jobs`. After broker
+execution, the gateway retrieves and persists the signed terminal claim. A
+background settler submits that exact evidence to LOC. Transient failures retry
+without abandonment; `LOC_SETTLE_ALERT_ATTEMPTS` only controls alerting. A
+`409 job_already_settled` is terminal success after a lost response. Evidence,
+identity, and work-unit failures stop for operator review.
 
-Why durable + async rather than inline: the refund is not on the request
-critical path, and a transient LOC blip must not block the user's
-response or strand money. A missed settle only ever means *over-paying
-the estimate* — bounded by the durable settler retrying until it lands.
+Why durable + async rather than inline: accounting is not on the response
+critical path, and a transient LOC blip must not block the user's response or
+discard evidence. The durable workers retain lookup and settlement work until
+it reaches an explicit terminal state.
 
-### Why the gateway no longer ranks routes
+### Why the gateway does not rank routes
 
 Selection used to live in the gateway (a resolver-backed `routeSelector`
 with per-candidate health cooldowns + failover across many candidates,
@@ -78,12 +75,9 @@ plus `Livepeer-Selector-*` request-header hints, preferred-`extra`
 ranking, max-price filtering, and an `INVALID_RECIPIENT_RAND` payment
 retry loop). All of that is **dropped**: the LOC returns a single route
 per job and owns selection and the ticket lifecycle end to end. The
-gateway's only routing concern now is a **mode-mismatch retry** — if the
-LOC returns a `mode` that doesn't match the wire module the route needs
-(`http-reqresp@v0` / `http-stream@v0` / `http-multipart@v0`), the gateway
-settles 0 with outcome `mode_mismatch` and opens a fresh job
-(`LOC_JOB_RETRIES`, also covering 429/5xx). This keeps one selection
-authority and avoids two systems disagreeing about price or health.
+gateway validates LOC's protocol, selected HTTP transport, and work unit before
+broker dispatch. Transient open failures retry the identical request under the
+same idempotency key; the gateway never replaces an admitted job.
 
 Capability workers are not part of this repo or compose.
 

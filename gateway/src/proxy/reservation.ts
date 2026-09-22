@@ -1,17 +1,13 @@
-// Reservation lifecycle helpers. Each /v1/* route calls these around
-// its dispatch — open → dispatch → commit | refund.
-//
-// In v1 there's no billing math: open writes state='open', commit writes
-// state='committed' with observed work_units, refund writes
-// state='refunded' with the error text. Forward-compat with future
-// billing: the state machine + numeric fields are already in the schema.
+// Gateway request-observation lifecycle. Each /v1/* route records open,
+// dispatch, and the customer-visible outcome. These rows are operational
+// telemetry only; signed broker evidence is the sole LOC accounting input.
 
 import { randomUUID } from 'node:crypto';
 
 import type { ServerDeps } from '../server.js';
 import * as usageRepo from '../repo/usageReservations.js';
 import { proxyReservationsTotal } from '../metrics.js';
-import type { RouteCandidate } from '../loc/dispatch.js';
+import type { JobRef, RouteCandidate } from '../loc/dispatch.js';
 
 export interface OpenReservationInput {
   apiKeyId: string;
@@ -61,9 +57,6 @@ export async function openReservation(
 export interface CommitInput {
   workUnits: number | null;
   statusCode: number;
-  /** LOC job to settle with the observed units. The same DB write that
-   * commits the reservation enqueues the durable settle (settler.ts). */
-  locJobId?: string | null;
 }
 
 export async function commitReservation(
@@ -76,31 +69,27 @@ export async function commitReservation(
     committedWorkUnits: input.workUnits,
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
-    locJobId: input.locJobId ?? null,
   });
   proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'committed' });
 }
 
-export interface RefundInput {
+export interface FailureInput {
   statusCode: number;
   errorText: string;
-  /** LOC job to settle with 0 units — full refund of the estimate. */
-  locJobId?: string | null;
 }
 
-export async function refundReservation(
+export async function failReservation(
   deps: ServerDeps,
   handle: ReservationHandle,
-  input: RefundInput,
+  input: FailureInput,
 ): Promise<void> {
-  await usageRepo.refund(deps.db, {
+  await usageRepo.fail(deps.db, {
     workId: handle.workId,
     latencyMs: Date.now() - handle.startedAt,
     statusCode: input.statusCode,
     errorText: input.errorText,
-    locJobId: input.locJobId ?? null,
   });
-  proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'refunded' });
+  proxyReservationsTotal.inc({ capability: handle.capability, outcome: 'failed' });
 }
 
 export async function recordSelectedRoute(
@@ -121,6 +110,33 @@ export async function recordSelectedRoute(
     quoteVersion: String(candidate.quoteVersion ?? 0),
     constraintFingerprintHex: bytesToHex(candidate.constraintFingerprint),
     routeFingerprintHex: bytesToHex(candidate.routeFingerprint),
+  });
+}
+
+/** Dispatch calls this immediately after the idempotent LOC open and
+ * again once broker admission reveals Livepeer-Job-Id. */
+export async function recordPaidJob(
+  deps: ServerDeps,
+  handle: ReservationHandle,
+  job: JobRef,
+  candidate: RouteCandidate,
+): Promise<void> {
+  await usageRepo.recordPaidJobIdentity(deps.db, {
+    workId: handle.workId,
+    locIdempotencyKey: job.idempotencyKey,
+    locJobId: job.jobId,
+    locRequestId: job.requestId,
+    paymentWorkId: job.workId,
+    brokerJobId: job.brokerJobId || null,
+    protocol: job.protocol,
+    transport: job.transport,
+    workUnit: job.workUnit,
+    settleEndpoint: job.settleEndpoint,
+    brokerUrl: job.brokerUrl,
+    selectedCapability: job.capability,
+    selectedOffering: job.offering,
+    unitsPerPrice: candidate.unitsPerPrice || null,
+    pricePerWorkUnitWei: candidate.pricePerWorkUnitWei || null,
   });
 }
 

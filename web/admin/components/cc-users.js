@@ -82,7 +82,7 @@ class CcUsers extends LitElement {
               detail.
             </p>
             <h3>Usage</h3>
-            <p class="msg">Total ${this.selected.usage.totalRequests} · committed ${this.selected.usage.committedTotal} · refunded ${this.selected.usage.refundedTotal}</p>
+            <p class="msg">Total ${this.selected.usage.totalRequests} · committed ${this.selected.usage.committedTotal} · failed ${this.selected.usage.failedTotal}</p>
             <h3>API keys</h3>
             <table>
               <thead>

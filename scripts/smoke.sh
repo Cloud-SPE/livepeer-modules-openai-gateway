@@ -7,8 +7,8 @@
 
 set -euo pipefail
 
-GATEWAY="${GATEWAY:-http://localhost:4000}"
-ADMIN_TOKEN="${ADMIN_TOKEN:-${SMOKE_ADMIN_TOKEN:-smoke-admin-token}}"
+GATEWAY="${GATEWAY:-http://127.0.0.1:4001}"
+ADMIN_TOKEN="${ADMIN_TOKEN:-${SMOKE_ADMIN_TOKEN:-}}"
 EMAIL="smoke+$(date +%s)@example.com"
 NAME="Smoke Tester"
 
@@ -29,16 +29,21 @@ section "health"
 status=$(curl -s -o /dev/null -w "%{http_code}" "$GATEWAY/health")
 require_status 200 "$status" "GET /health"
 
+if [[ -z "$ADMIN_TOKEN" ]]; then
+  ADMIN_TOKEN=$(docker compose exec -T gateway printenv ADMIN_TOKEN 2>/dev/null || true)
+fi
+[[ -n "$ADMIN_TOKEN" ]] || fail "ADMIN_TOKEN is not configured in the gateway"
+
 # ── 1. /v1/models — non-empty registry-backed catalog ────────────
 section "catalog"
 body=$(curl -fsS "$GATEWAY/v1/models")
 echo "$body" | grep -q '"object":"list"' || fail "GET /v1/models response shape"
 model=$(docker compose exec -T db \
   psql -U "${POSTGRES_USER:-openai_service}" -d "${POSTGRES_DB:-openai_service}" \
-  -tAc "SELECT model_id FROM models WHERE active = true AND capability = 'openai:embeddings' ORDER BY snapshot_at DESC LIMIT 1;" | tr -d '[:space:]')
-[[ -n "$model" ]] || fail "no active embeddings model in models cache"
+  -tAc "SELECT model_id FROM models WHERE active = true AND capability = 'openai:chat-completions' ORDER BY snapshot_at DESC LIMIT 1;" | tr -d '[:space:]')
+[[ -n "$model" ]] || fail "no active chat-completions model in models cache"
 pass "GET /v1/models returns OpenAI catalog shape"
-pass "selected embeddings-capable model ($model)"
+pass "selected chat-completions model ($model)"
 
 # ── 2. signup ─────────────────────────────────────────────────────
 section "signup → verify → approve"
@@ -66,16 +71,16 @@ status=$(curl -s -o /tmp/smoke-approve.json -w "%{http_code}" \
   -X POST -H "X-Admin-Token: $ADMIN_TOKEN" "$GATEWAY/admin/waitlist/$wid/approve")
 require_status 200 "$status" "POST /admin/waitlist/:id/approve"
 
-# Pull the plaintext key out of the gateway logs (email is disabled in
-# default compose; the key was logged with "would have sent").
-key=$(docker compose logs --tail=100 gateway 2>/dev/null | grep -oE 'sk-[A-Za-z0-9_-]{40,}' | head -1 || true)
-[[ -n "$key" ]] || fail "no plaintext API key found in gateway logs"
-pass "extracted plaintext key (${key:0:11}…)"
+# Approval returns the plaintext exactly once. Read that response directly;
+# email providers deliberately do not log secrets.
+key=$(jq -er '.apiKey.plaintextKey' /tmp/smoke-approve.json) \
+  || fail "approval response did not contain a plaintext API key"
+pass "captured one-time plaintext key (${key:0:11}…)"
 
 # ── 5. portal login + account ────────────────────────────────────
 section "portal cookie flow"
 jar=$(mktemp)
-trap 'rm -f $jar' EXIT
+trap 'rm -f "$jar"' EXIT
 status=$(curl -s -c "$jar" -o /dev/null -w "%{http_code}" \
   -X POST "$GATEWAY/portal/login" \
   -H "Content-Type: application/json" \
@@ -88,14 +93,16 @@ pass "GET /portal/account returns session user"
 
 # ── 6. /v1/* bearer auth ─────────────────────────────────────────
 section "/v1/* bearer auth"
-status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/v1/embeddings" \
-  -H "Content-Type: application/json" -d '{"model":"x","input":"hi"}')
-require_status 401 "$status" "POST /v1/embeddings without auth → 401"
+status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GATEWAY/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"default","messages":[{"role":"user","content":"Return the word smoke."}],"max_tokens":64}')
+require_status 401 "$status" "POST /v1/chat/completions without auth → 401"
 
-status=$(curl -s -o /tmp/smoke-emb.json -w "%{http_code}" -X POST "$GATEWAY/v1/embeddings" \
-  -H "Authorization: Bearer $key" \
-  -H "Content-Type: application/json" -d "{\"model\":\"$model\",\"input\":\"hi\"}")
-require_status 200 "$status" "POST /v1/embeddings with valid key"
+OPENAI_BASE_URL="$GATEWAY" \
+OPENAI_API_KEY="$key" \
+OPENAI_CHAT_MODEL="$model" \
+  pnpm --dir gateway exec tsx ../scripts/live-conformance.ts \
+  || fail "paid-job/v1 live conformance failed"
 
 # ── 7. usage_reservations recorded the request ──────────────────
 recs=$(docker compose exec -T db \
@@ -106,11 +113,17 @@ pass "usage_reservations recorded the request ($recs committed total)"
 
 # ── 8. metrics ──────────────────────────────────────────────────
 section "/metrics"
-status=$(curl -s -o /tmp/smoke-metrics.txt -w "%{http_code}" "$GATEWAY/metrics")
+metrics_token=$(docker compose exec -T gateway printenv METRICS_TOKEN 2>/dev/null || true)
+metrics_auth=()
+if [[ -n "$metrics_token" ]]; then
+  metrics_auth=(-H "Authorization: Bearer $metrics_token")
+fi
+status=$(curl -s -o /tmp/smoke-metrics.txt -w "%{http_code}" \
+  "${metrics_auth[@]}" "$GATEWAY/metrics")
 require_status 200 "$status" "GET /metrics"
 grep -q "openai_service_proxy_reservations_total" /tmp/smoke-metrics.txt \
   || fail "/metrics missing proxy reservation counter"
 pass "/metrics exposes openai_service_proxy_reservations_total"
 
 # ── done ────────────────────────────────────────────────────────
-section "smoke passed"
+section "smoke passed — unary, stream, multipart, and settlement"

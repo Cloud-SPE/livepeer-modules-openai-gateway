@@ -6,13 +6,20 @@
 // offering, model identity is dynamic again: the user-facing model id
 // is extra.openai.model (also the runner-facing serving name), falling
 // back to the offering id when the metadata is absent. Interaction
-// mode comes from extra.interaction_mode.
+// protocol and transports are required offering fields.
 //
 // inspect() memoizes for a short TTL — route handlers resolve
 // model→offering on every request, and the snapshot only changes as
 // fast as orchestrator manifests do.
 
-import type { LocCapability, LocClient } from '../loc/client.js';
+import type {
+  JobTransport,
+  LocCapability,
+  LocClient,
+  LocWorkUnitEstimator,
+} from '../loc/client.js';
+
+export const PAID_JOB_PROTOCOL = 'paid-job/v1';
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -22,10 +29,12 @@ export interface RouteCandidate {
   capability: string;
   offering: string;
   model: string | null;
-  interactionMode: string | null;
+  protocol: typeof PAID_JOB_PROTOCOL;
+  transports: JobTransport[];
   ethAddress: string;
   pricePerWorkUnitWei: string;
   workUnit: string;
+  estimator?: LocWorkUnitEstimator;
   unitsPerPrice: number;
   quoteId: string;
   quoteVersion: number;
@@ -66,16 +75,28 @@ export function flattenCapabilities(capabilities: LocCapability[]): RouteCandida
     if (!capability.name) continue;
     for (const offering of capability.offerings) {
       if (!offering.id) continue;
+      if (offering.protocol !== PAID_JOB_PROTOCOL) {
+        // LOC serves a shared catalog. Session capabilities (for example the
+        // Meetings pilot) are valid LOC entries but are outside this
+        // paid-job-only gateway's product surface.
+        if (offering.protocol) continue;
+        throw new Error(`missing protocol for ${capability.name}/${offering.id}`);
+      }
+      if (offering.transports.length === 0) {
+        throw new Error(`missing job transports for ${capability.name}/${offering.id}`);
+      }
       const extra = normalizeExtra(offering.extra);
       out.push({
         brokerUrl: '',
         capability: capability.name,
         offering: offering.id,
         model: inferModel(extra) ?? offering.id,
-        interactionMode: inferInteractionMode(extra),
+        protocol: PAID_JOB_PROTOCOL,
+        transports: [...offering.transports],
         ethAddress: '',
         pricePerWorkUnitWei: offering.pricePerWorkUnitWei ?? '0',
         workUnit: offering.workUnit ?? capability.workUnit ?? '',
+        ...(offering.estimator ? { estimator: { ...offering.estimator } } : {}),
         unitsPerPrice: 1,
         quoteId: '',
         quoteVersion: 0,
@@ -98,12 +119,6 @@ export function inferModel(extra: JsonValue | null): string | null {
   if (!isJsonObject(openai)) return null;
   const model = openai['model'];
   return typeof model === 'string' && model.trim().length > 0 ? model.trim() : null;
-}
-
-export function inferInteractionMode(extra: JsonValue | null): string | null {
-  if (!isJsonObject(extra)) return null;
-  const mode = extra['interaction_mode'];
-  return typeof mode === 'string' && mode.trim().length > 0 ? mode.trim() : null;
 }
 
 function normalizeExtra(raw: Record<string, unknown>): JsonValue | null {

@@ -8,6 +8,7 @@ import {
   bigint,
   numeric,
   index,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 
 // Pure cache of the service-registry-daemon snapshot. Populated by the
@@ -20,9 +21,10 @@ import {
 export const models = pgTable(
   'models',
   {
-    modelId: text('model_id').primaryKey(),
+    modelId: text('model_id').notNull(),
     capability: text('capability').notNull(),
-    interactionMode: text('interaction_mode'),
+    protocol: text('protocol').notNull(),
+    transports: jsonb('transports').$type<string[]>().notNull(),
 
     // Display fields — pulled from registry extras when present, nullable
     // otherwise. Operators MAY override via UPDATE; the refresh task
@@ -54,6 +56,7 @@ export const models = pgTable(
       .default(sql`now()`),
   },
   (t) => ({
+    primaryKey: primaryKey({ columns: [t.capability, t.modelId] }),
     capabilityIdx: index('idx_models_capability')
       .on(t.capability, t.modelId)
       .where(sql`${t.active} = true`),

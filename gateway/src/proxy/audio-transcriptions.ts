@@ -1,7 +1,13 @@
 // POST /v1/audio/transcriptions — multipart/form-data input, Whisper STT.
-// Work unit: requests (1 per call). Audio duration would be more accurate
-// but isn't recoverable without decoding; the registry can advertise
-// `work_unit=requests` and we record 1.
+// Work unit: whole seconds of uploaded audio. The gateway-owned implementation
+// of the advertised estimator sizes the LOC funding ceiling before dispatch;
+// it is never settlement evidence. The broker's signed terminal claim remains
+// authoritative.
+
+import {
+  ESTIMATOR,
+  estimateCeilingSecondsFromMultipart,
+} from './service/audioDuration/index.js';
 
 import type { FastifyInstance } from 'fastify';
 
@@ -9,20 +15,26 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchMultipart, jobRefFromError } from '../loc/dispatch.js';
+import { dispatchMultipart } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
 import { extractMultipartField } from './service/multipart.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
   openReservation,
+  recordPaidJob,
   recordSelectedRoute,
-  refundReservation,
+  failReservation,
 } from './reservation.js';
 import { bearerAuth } from './auth.js';
 import { rateLimitV1 } from './rateLimit.js';
 
 const BODY_LIMIT = 100 * 1024 * 1024; // 100 MB
+const REQUIRED_ESTIMATOR = {
+  id: ESTIMATOR,
+  rounding: 'ceil-to-whole-seconds',
+  exactness: 'exact-or-reject',
+} as const;
 
 export async function registerAudioTranscriptionsRoute(
   app: FastifyInstance,
@@ -74,21 +86,55 @@ export async function registerAudioTranscriptionsRoute(
           });
       }
 
-      const handle = await openReservation(deps, {
-        apiKeyId: auth.apiKeyId,
-        capability,
-        model: requestedModel,
-        estimatedWorkUnits: 1,
-      });
+      let ceilingSeconds: number;
+      try {
+        ceilingSeconds = transcriptionCeilingSeconds(body, contentType);
+      } catch {
+        return reply
+          .code(400)
+          .header(HEADER.REQUEST_ID, requestId)
+          .send({
+            error: {
+              message:
+                'Audio duration cannot be measured exactly for funding; use a supported container with exact duration metadata.',
+              type: 'invalid_request_error',
+              code: 'audio_duration_inexact_or_unsupported',
+            },
+          });
+      }
 
       // Resolve a friendly model id to its offering for the LOC job.
       // The multipart body is forwarded verbatim (no model rewrite) —
       // transcription runners are addressed by offering id today.
-      const { offering } = await resolveRoute({
-        catalog: deps.registryCatalog,
-        modelMap: deps.config.locModelMap,
+      let offering: string;
+      try {
+        ({ offering } = await resolveRoute({
+          catalog: deps.registryCatalog,
+          modelMap: deps.config.locModelMap,
+          capability,
+          requestedModel,
+          transport: 'multipart',
+          expectedWorkUnit: 'seconds',
+          expectedEstimator: REQUIRED_ESTIMATOR,
+        }));
+      } catch {
+        return reply
+          .code(503)
+          .header(HEADER.REQUEST_ID, requestId)
+          .send({
+            error: {
+              message: 'The selected transcription offering does not advertise a supported exact funding estimator.',
+              type: 'service_unavailable_error',
+              code: 'transcription_estimator_unavailable',
+            },
+          });
+      }
+
+      const handle = await openReservation(deps, {
+        apiKeyId: auth.apiKeyId,
         capability,
-        requestedModel,
+        model: requestedModel,
+        estimatedWorkUnits: ceilingSeconds,
       });
 
       try {
@@ -96,17 +142,20 @@ export async function registerAudioTranscriptionsRoute(
           loc: deps.loc,
           capability,
           offering,
-          estimatedUnits: 1,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          estimatedUnits: ceilingSeconds,
+          maxTotalUnits: ceilingSeconds,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body,
           contentType,
-          requestId,
+          idempotencyKey: handle.workId,
+          onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
         await commitReservation(deps, handle, {
-          workUnits: 1,
+          // The estimator only bounds spend; it is not an observation of
+          // the broker's authoritative terminal usage.
+          workUnits: null,
           statusCode: dispatched.result.status,
-          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -119,15 +168,24 @@ export async function registerAudioTranscriptionsRoute(
       } catch (err) {
         const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
-        await refundReservation(deps, handle, {
+        await failReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
-          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
     },
   );
+}
+
+export const TRANSCRIPTION_ESTIMATOR_ID = ESTIMATOR;
+
+export function transcriptionCeilingSeconds(body: Uint8Array, contentType: string): number {
+  const seconds = estimateCeilingSecondsFromMultipart(body, contentType);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) {
+    throw new Error(`${ESTIMATOR} returned a non-positive or unsafe ceiling`);
+  }
+  return seconds;
 }
 
 function brokerStatus(err: unknown): number {

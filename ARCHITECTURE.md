@@ -55,7 +55,7 @@ their own containers / on other hosts).
 
 Route selection and payment minting are delegated to the **LOC —
 Livepeer Open Clearinghouse**, an external HTTP service
-(`https://loc.cloudspe.com` by default) reached with an `X-API-Key`
+(the sibling localhost service in development) reached with an `X-API-Key`
 header. The gateway opens a job per `/v1/*` request and settles actual
 usage afterwards. The LOC owns chain access and the pooled wallet that
 signs payment (PM) tickets; this repo holds no keys and never talks to
@@ -91,8 +91,8 @@ mechanical import-graph linter is on the tech-debt tracker.
 
 | Subtree | Origin | Notes |
 |---|---|---|
-| `proxy/livepeer/` | Copied verbatim from upstream `livepeer-network-modules/openai-gateway/` | Load-bearing wire mechanics — streaming usage parsing, broker dispatch over the http-reqresp/http-stream/http-multipart modules. Don't churn. |
-| `loc/` (`client.ts`, `dispatch.ts`, `settler.ts`) | Hand-written in this repo | Typed HTTP client for the LOC, the per-request job open → dispatch → settle flow, and the durable background settler. Replaced the deleted `proxy/service/` route selector + `proxy/livepeer/payment.ts`. |
+| `proxy/livepeer/` | Hand-maintained protocol adapters | `/v1/job` unary, stream, and multipart transports; no accounting policy. |
+| `loc/` | Hand-written in this repo | Typed LOC client, idempotent open/dispatch, signed evidence lookup, and durable settlement workers. |
 | `proxy/{chat,embeddings,audio-speech,audio-transcriptions,images}.ts` | Adapted from upstream | Stripped of `customer-portal` + `chatBilling`/`nonChatBilling`; rewired to local `apiKeys` + `usage_reservations`. |
 | `proxy/rerank.ts` | Ported from an earlier Rust implementation of the same surface | TS reimplementation. |
 | Everything else (`routes/`, `repo/`, `schema/`, `crypto.ts`, `email/`, `metrics.ts`, `db.ts`, `config.ts`, `server.ts`, `index.ts`) | Hand-written in this repo | Built directly for this repository. |
@@ -150,7 +150,7 @@ erDiagram
     text model
     text broker_url
     text eth_address
-    text state "open|committed|refunded"
+    text state "open|committed|failed"
     bigint estimated_work_units
     bigint committed_work_units
     numeric price_per_work_unit_wei
@@ -168,7 +168,8 @@ erDiagram
   MODELS {
     text model_id PK
     text capability
-    text interaction_mode
+    text protocol
+    jsonb transports
     text name
     text description
     text provider
@@ -186,19 +187,19 @@ erDiagram
 **One Postgres database. One migration track.** `gateway/migrations/`
 holds numbered `.sql` files applied in order at boot by a
 home-grown runner (`gateway/src/db.ts`). The current shape is
-`0001_initial.sql` through `0004_loc_settlement.sql` (the last adds the
-`loc_job_id` / `settle_state` / `settle_actual_units` / `settle_outcome`
-columns that drive the durable settler).
+`0001_initial.sql` through `0009_usage_outcome_not_refund.sql`. Migrations
+`0004`–`0009` are the breaking paid-job/v1 transition: LOC and broker
+identities, protocol/transport catalog axes, exact signed evidence, request-ID
+recovery states, capability-scoped model IDs, and the customer outcome
+`failed`. The rebuildable v0 model cache is cleared rather than dual-read.
 
 ### Why the state machine on `usage_reservations`
 
-v1 has no customer billing math, so `open → committed | refunded` is
-purely observational. The same DB write that commits or refunds a
-reservation also enqueues a durable **settle intent**
-(`settle_state='pending'` + `settle_actual_units`), which the background
-settler drains by calling the LOC. The schema is intentionally
-forward-compatible: when customer billing lands, the same rows + state
-machine can carry money math without a schema change.
+`open → committed | failed` records the customer-visible gateway outcome;
+it is not network accounting evidence. Broker settlement lookup persists the
+complete signed claim and only then sets `settle_state='pending'`. The
+background settler submits that exact claim to LOC. Gateway observations,
+signed broker evidence, and LOC settlement state stay distinct.
 
 ### Why a `models` cache table
 
@@ -256,35 +257,39 @@ sequenceDiagram
   participant LOC as LOC clearinghouse
   participant BRK as capability-broker
   participant RNR as runner
-  participant SET as settler (background)
+  participant LOOK as evidence lookup
+  participant SET as LOC settler
 
   C->>GW: POST /v1/chat/completions<br/>Authorization: Bearer sk-…
   GW->>DB: SELECT api_keys WHERE key_hash=…
   Note over GW,DB: 401 if missing/revoked/unapproved
   GW->>DB: INSERT usage_reservations (state='open', work_id)
-  GW->>LOC: POST /v1/jobs {capability, offering, estimated_units}
-  Note over LOC: selects a route AND mints the payment<br/>envelope; charges the estimate to the<br/>operator's credit balance
-  LOC-->>GW: {job_id, broker_url, mode, payment_envelope, …}
-  GW->>BRK: POST broker_url<br/>Livepeer-Capability, Livepeer-Payment, …
+  GW->>LOC: POST /v1/jobs<br/>Idempotency-Key + transport + funded ceiling
+  Note over LOC: selects one route and mints<br/>the bounded payment envelope
+  LOC-->>GW: {job_id, request_id, work_id, broker_url,<br/>protocol, transport, work_unit, payment_envelope}
+  GW->>DB: persist LOC and payment identities
+  GW->>BRK: POST /v1/job<br/>Protocol + LOC request ID + payment
   BRK->>RNR: forward request
   RNR-->>BRK: response (SSE stream or unary)
   BRK-->>GW: response
 
   alt success
-    GW->>DB: UPDATE usage_reservations<br/>state='committed', committed_work_units=…,<br/>loc_job_id, settle_state='pending'
+    GW->>DB: state='committed'; persist broker job ID
     GW-->>C: response (200, SSE or JSON)
   else upstream failure
-    GW->>DB: UPDATE usage_reservations<br/>state='refunded', error_text=…,<br/>settle_state='pending' (0 units)
+    GW->>DB: state='failed', error_text=…<br/>accounting remains independent
     GW-->>C: OpenAI-shaped error<br/>(502/500)
   end
 
-  Note over GW,LOC: on LOC mode mismatch the gateway settles 0<br/>(outcome 'mode_mismatch') and re-opens a job<br/>(LOC_JOB_RETRIES retries)
-
   loop every LOC_SETTLE_INTERVAL_MS
-    SET->>DB: SELECT pending settle intents
-    SET->>LOC: POST /v1/jobs/{id}/settle {actual_units, outcome}
-    LOC-->>SET: refunds the unused part of the estimate
-    SET->>DB: settle_state='settled' (409/404 are terminal successes)
+    LOOK->>DB: SELECT pending evidence lookups
+    LOOK->>BRK: GET settlement by job ID or request ID
+    BRK-->>LOOK: signed terminal claim or pending state
+    LOOK->>DB: persist exact signed claim before settlement
+    SET->>DB: SELECT signed pending settlements
+    SET->>LOC: POST /v1/jobs/{id}/settle<br/>signed evidence + bound identities
+    LOC-->>SET: verified accounting result
+    SET->>DB: settle_state='settled'
   end
 ```
 
@@ -341,8 +346,9 @@ sequenceDiagram
 |---|---|
 | OpenAI SDK clients | HTTPS → `/v1/*` |
 | Portal / admin / site users | HTTPS → static SPAs + JSON APIs |
-| LOC clearinghouse | HTTPS + `X-API-Key` (`LOC_BASE_URL`); jobs + settle + capabilities |
-| `capability-broker` (on orch host) | HTTPS, per the Livepeer wire spec (broker URL comes from the LOC job) |
+| LOC clearinghouse | HTTP(S) + `X-API-Key` (`LOC_BASE_URL`); jobs + settle + capabilities |
+| `capability-broker` | HTTP(S), always using the URL returned by the LOC job; localhost pilot returns `127.0.0.1:8411` |
+| Local audio-duration estimator | Gateway-owned implementation of the advertised `multipart-audio-duration/v1` funding contract; no Modules source or package dependency |
 | Postgres | TCP, single DB for all SaaS data |
 | Resend | HTTPS, email delivery (optional in dev) |
 | EVM chain (Arbitrum One by default) | Indirectly — only via the LOC, which owns chain access and the PM-ticket wallet |
@@ -356,16 +362,16 @@ sequenceDiagram
   live in `waitlist`. The only join between the two namespaces is
   `api_keys.waitlist_id`.
 - **The wire spec is product-agnostic.** `proxy/livepeer/` only knows
-  `Livepeer-Capability` headers + interaction modes. Mapping OpenAI →
+  paid-job headers and HTTP transports. Mapping OpenAI →
   capability happens in the per-endpoint handlers
   (`proxy/{chat,embeddings,…}.ts`).
 - **The SaaS shell is product-agnostic.** Auth, waitlist, sessions,
   admin could be reused for a different inference surface. OpenAI
   specifics live entirely in `proxy/`.
-- **Runners don't import from the gateway and vice versa.** The only
-  contract between them is the HTTP capability endpoint a runner
-  exposes, mediated by the broker. Either could be deleted without
-  breaking the other.
+- **Runner implementations do not cross the boundary.** Workload execution is
+  mediated by broker HTTP. The gateway-owned audio-duration estimator
+  implements a published funding contract; it does not import runner, broker,
+  or Modules implementation code.
 
 ---
 
@@ -410,8 +416,9 @@ flowchart TB
 ```
 
 The compose stack is just `db` + `gateway` — no daemon sidecars, no
-unix-socket volumes. In dev, the same shape holds: `docker compose up -d`
-runs gateway + db; each SPA runs via its own `dev-server.js`, serving its
+unix-socket volumes. In the localhost pilot, `make pilot` runs foreground
+Compose with host networking for the gateway so LOC-returned loopback broker
+URLs work. Each SPA runs via its own `dev-server.js`, serving its
 checked-in files locally and proxying API traffic back to the gateway.
 
 ---

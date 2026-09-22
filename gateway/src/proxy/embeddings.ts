@@ -6,14 +6,15 @@ import type { ServerDeps } from '../server.js';
 import { Capability } from './livepeer/capabilityMap.js';
 import { HEADER } from './livepeer/headers.js';
 import { readOrSynthRequestId } from './livepeer/requestId.js';
-import { dispatchReqresp, jobRefFromError } from '../loc/dispatch.js';
+import { dispatchReqresp } from '../loc/dispatch.js';
 import { resolveRoute } from '../loc/resolve.js';
 import { handleBrokerError } from './errors.js';
 import {
   commitReservation,
   openReservation,
+  recordPaidJob,
   recordSelectedRoute,
-  refundReservation,
+  failReservation,
 } from './reservation.js';
 import { bearerAuth } from './auth.js';
 import { rateLimitV1 } from './rateLimit.js';
@@ -59,28 +60,30 @@ export async function registerEmbeddingsRoute(
         modelMap: deps.config.locModelMap,
         capability,
         requestedModel,
+        transport: 'unary',
+        expectedWorkUnit: 'tokens',
       });
       const upstreamBody =
         runnerModel !== requestedModel ? { ...body, model: runnerModel } : body;
 
       try {
-        const estimatedUnits = estimateEmbeddingUnits(body.input);
+        const funding = embeddingFunding(body.input);
         const dispatched = await dispatchReqresp({
           loc: deps.loc,
           capability,
           offering,
-          estimatedUnits,
-          maxJobAttempts: deps.config.locJobRetries + 1,
+          estimatedUnits: funding.estimatedUnits,
+          maxTotalUnits: funding.maxTotalUnits,
+          maxJobAttempts: deps.config.locOpenMaxAttempts,
           body: JSON.stringify(upstreamBody),
           contentType: 'application/json',
-          requestId,
+          idempotencyKey: handle.workId,
+          onJobUpdate: (job, candidate) => recordPaidJob(deps, handle, job, candidate),
         });
         await recordSelectedRoute(deps, handle, dispatched.candidate);
-        const usage = parseUsage(dispatched.result.body);
         await commitReservation(deps, handle, {
-          workUnits: usage,
+          workUnits: null,
           statusCode: dispatched.result.status,
-          locJobId: dispatched.jobRef.jobId,
         });
         await reply
           .code(dispatched.result.status)
@@ -90,29 +93,14 @@ export async function registerEmbeddingsRoute(
       } catch (err) {
         const candidate = (err as { routeCandidate?: import('../loc/dispatch.js').RouteCandidate }).routeCandidate;
         if (candidate) await recordSelectedRoute(deps, handle, candidate);
-        await refundReservation(deps, handle, {
+        await failReservation(deps, handle, {
           statusCode: brokerStatus(err),
           errorText: (err as Error).message ?? 'unknown',
-          locJobId: jobRefFromError(err)?.jobId ?? null,
         });
         handleBrokerError(reply, err, requestId);
       }
     },
   );
-}
-
-function parseUsage(body: BodyInit | null): number | null {
-  // http-reqresp returns the broker body as an ArrayBuffer.
-  if (typeof body !== 'string' && !(body instanceof Uint8Array) && !(body instanceof ArrayBuffer)) {
-    return null;
-  }
-  try {
-    const text = typeof body === 'string' ? body : new TextDecoder().decode(body);
-    const parsed = JSON.parse(text) as { usage?: { total_tokens?: number } };
-    return typeof parsed?.usage?.total_tokens === 'number' ? parsed.usage.total_tokens : null;
-  } catch {
-    return null;
-  }
 }
 
 function estimateEmbeddingUnits(input: unknown): number {
@@ -123,6 +111,26 @@ function estimateEmbeddingUnits(input: unknown): number {
       input.reduce((sum, item) => sum + estimateEmbeddingUnits(item), 0),
     );
   }
+  return 1;
+}
+
+export function embeddingFunding(input: unknown): {
+  estimatedUnits: number;
+  maxTotalUnits: number;
+} {
+  const estimatedUnits = estimateEmbeddingUnits(input);
+  return {
+    estimatedUnits,
+    maxTotalUnits: Math.max(estimatedUnits, embeddingByteCeiling(input)),
+  };
+}
+
+function embeddingByteCeiling(input: unknown): number {
+  if (typeof input === 'string') return Math.max(1, Buffer.byteLength(input, 'utf8'));
+  if (Array.isArray(input)) {
+    return Math.max(1, input.reduce((sum, item) => sum + embeddingByteCeiling(item), 0));
+  }
+  // Numeric token ids are already tokenized and count one-for-one.
   return 1;
 }
 

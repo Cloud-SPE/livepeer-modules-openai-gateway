@@ -66,18 +66,22 @@ export async function upsertModelsFromSnapshot(
   candidates: RouteCandidate[],
 ): Promise<number> {
   const rows = candidatesToModelRows(candidates);
-  const seenIds = rows.map((r) => r.modelId);
 
   await db.transaction(async (tx) => {
+    // The table is a snapshot cache. Mark the previous snapshot inactive
+    // inside the transaction, then reactivate every row present now. This
+    // handles the same offering id appearing under multiple capabilities.
+    await tx.update(models).set({ active: false }).where(eq(models.active, true));
     if (rows.length > 0) {
       await tx
         .insert(models)
         .values(rows)
         .onConflictDoUpdate({
-          target: models.modelId,
+          target: [models.capability, models.modelId],
           set: {
             capability: sql`excluded.capability`,
-            interactionMode: sql`excluded.interaction_mode`,
+            protocol: sql`excluded.protocol`,
+            transports: sql`excluded.transports`,
             ethAddress: sql`excluded.eth_address`,
             pricePerWorkUnitWei: sql`excluded.price_per_work_unit_wei`,
             brokerUrl: sql`excluded.broker_url`,
@@ -99,20 +103,6 @@ export async function upsertModelsFromSnapshot(
           },
         });
     }
-    // Mark stale rows inactive.
-    if (seenIds.length > 0) {
-      await tx
-        .update(models)
-        .set({ active: false })
-        .where(
-          sql`${models.modelId} NOT IN (${sql.join(
-            seenIds.map((id) => sql`${id}`),
-            sql`, `,
-          )}) AND ${models.active} = true`,
-        );
-    } else {
-      await tx.update(models).set({ active: false }).where(eq(models.active, true));
-    }
   });
 
   return rows.length;
@@ -120,14 +110,14 @@ export async function upsertModelsFromSnapshot(
 
 /**
  * Pure transform: RouteCandidate[] → models rows. De-duplicates by
- * modelId (last wins), drops candidates with no derivable modelId,
+ * capability+modelId (last wins), drops candidates with no offering id,
  * extracts display fields from `extra.openai` (preferred) or `extra`
  * itself. Exported for unit tests.
  */
 export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] {
-  const rowsByModelId = new Map<string, NewModel>();
+  const rowsByIdentity = new Map<string, NewModel>();
   for (const c of candidates) {
-    const modelId = (c.model ?? c.offering ?? '').trim();
+    const modelId = c.offering.trim();
     if (!modelId) continue;
     const extraObj =
       c.extra && typeof c.extra === 'object' && !Array.isArray(c.extra)
@@ -137,10 +127,11 @@ export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] 
       extraObj && typeof extraObj['openai'] === 'object' && extraObj['openai'] !== null
         ? (extraObj['openai'] as Record<string, unknown>)
         : null;
-    rowsByModelId.set(modelId, {
+    rowsByIdentity.set(`${c.capability}\u0000${modelId}`, {
       modelId,
       capability: c.capability,
-      interactionMode: c.interactionMode,
+      protocol: c.protocol,
+      transports: c.transports,
       name: pickString(openai, 'name') ?? pickString(extraObj, 'name'),
       description:
         pickString(openai, 'description') ?? pickString(extraObj, 'description'),
@@ -160,7 +151,7 @@ export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] 
       snapshotAt: new Date(),
     });
   }
-  return [...rowsByModelId.values()];
+  return [...rowsByIdentity.values()];
 }
 
 function pickString(

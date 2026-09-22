@@ -63,14 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Build (no push)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: gateway/Dockerfile
-          push: false
-          tags: openai-service-gateway:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: REGISTRY=local TAG=ci ./infra/scripts/build-images.sh
 
   docker-publish:
     name: Docker publish (gateway)
@@ -94,18 +87,35 @@ jobs:
       - name: Extract tag
         id: meta
         run: |
-          VERSION="${GITHUB_REF#refs/tags/}"
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const expected = process.env.RELEASE_VERSION;
+          const manifests = [
+            'package.json',
+            'gateway/package.json',
+            'web/site/package.json',
+            'web/portal/package.json',
+            'web/admin/package.json',
+          ];
+          for (const manifest of manifests) {
+            const actual = JSON.parse(readFileSync(manifest, 'utf8')).version;
+            if (actual !== expected) {
+              throw new Error(`${manifest} version ${actual} does not match release tag v${expected}`);
+            }
+          }
+          NODE
+
       - name: Build + push (multi-arch)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: gateway/Dockerfile
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            tztcloud/openai-service-gateway:${{ steps.meta.outputs.version }}
-            tztcloud/openai-service-gateway:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: PUSH=1 ./infra/scripts/build-images.sh

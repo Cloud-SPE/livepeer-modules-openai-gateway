@@ -2,9 +2,9 @@
 //
 // The LOC fronts the service-registry and payer daemons: POST /v1/jobs
 // selects a route AND mints the payment envelope in one call; the
-// envelope goes verbatim into the `Livepeer-Payment` header. Jobs are
-// charged at issuance for the full estimate — settling with actual
-// units afterwards is what claws back the difference (see settler.ts).
+// envelope goes verbatim into the `Livepeer-Payment` header. The envelope
+// funds a bounded exchange; only signed broker evidence authorizes final
+// LOC accounting (see settler.ts).
 
 export interface LocClientConfig {
   baseUrl: string;
@@ -26,20 +26,25 @@ export class LocApiError extends Error {
   }
 }
 
-export type LocMode = 'http-reqresp@v0' | 'http-stream@v0' | 'http-multipart@v0';
+export type JobTransport = 'unary' | 'stream' | 'multipart';
 
 export interface OpenJobRequest {
+  idempotencyKey: string;
   capability: string;
   offering: string;
+  transport: JobTransport;
   estimatedUnits: number;
   maxTotalUnits?: number;
 }
 
 export interface OpenJobResponse {
   jobId: string;
+  requestId: string;
   workId: string;
   brokerUrl: string;
-  mode: string;
+  protocol: 'paid-job/v1';
+  transport: JobTransport;
+  workUnit: string;
   /** Base64 payment bytes — goes verbatim into the Livepeer-Payment header. */
   paymentEnvelope: string;
   expectedValueWei: string;
@@ -50,8 +55,30 @@ export interface OpenJobResponse {
 
 export interface SettleJobRequest {
   actualUnits: number;
+  brokerJobId: string;
+  workUnit: string;
   outcome?: string;
-  settlement?: Record<string, unknown>;
+  settlement: SettlementEnvelope;
+}
+
+export interface SettlementSignature {
+  algorithm: 'secp256k1';
+  canonicalization: 'jcs';
+  value: string;
+}
+
+export interface SettlementEnvelope {
+  payload: Record<string, unknown>;
+  signature: SettlementSignature;
+}
+
+export interface LocCapStatus {
+  sessionPctUsed: number;
+  spendPeriodPctUsed: number | null;
+  userBalancePctUsed: number | null;
+  operatorPoolPctUsed: number | null;
+  willRefuseNextRefill: boolean;
+  winddownReason: string | null;
 }
 
 export interface SettleJobResponse {
@@ -62,21 +89,33 @@ export interface SettleJobResponse {
   refundWei: string;
   outcome: string;
   closedAt: string;
+  capStatus: LocCapStatus;
 }
 
 export interface LocOffering {
   id: string;
   pricePerWorkUnitWei: string | null;
   workUnit: string | null;
+  estimator?: LocWorkUnitEstimator;
+  protocol: string;
+  transports: JobTransport[];
   /** Merged node+capability extra_json registry metadata (opaque JSON
-   * object; e.g. extra.openai.model, extra.interaction_mode). Empty
+   * object; e.g. extra.openai.model. Empty
    * object when the LOC predates the extra-exposure change. */
   extra: Record<string, unknown>;
+}
+
+export interface LocWorkUnitEstimator {
+  id: string;
+  rounding: string;
+  exactness: string;
+  fixtures: string | null;
 }
 
 export interface LocCapability {
   name: string;
   workUnit: string | null;
+  estimator?: LocWorkUnitEstimator;
   offerings: LocOffering[];
 }
 
@@ -100,7 +139,7 @@ export interface LocHealth {
 
 export interface LocClient {
   openJob(req: OpenJobRequest): Promise<OpenJobResponse>;
-  settleJob(jobId: string, req: SettleJobRequest): Promise<SettleJobResponse>;
+  settleJob(settleEndpoint: string, jobId: string, req: SettleJobRequest): Promise<SettleJobResponse>;
   listCapabilities(): Promise<LocCapability[]>;
   listOrchestrators(capability?: string): Promise<LocOrchestrator[]>;
   getBalance(): Promise<LocBalance>;
@@ -112,8 +151,12 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
     method: 'GET' | 'POST',
     path: string,
     body?: unknown,
+    additionalHeaders?: Record<string, string>,
   ): Promise<unknown> => {
-    const headers: Record<string, string> = { 'X-API-Key': cfg.apiKey };
+    const headers: Record<string, string> = {
+      'X-API-Key': cfg.apiKey,
+      ...additionalHeaders,
+    };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
 
     let resp: Response;
@@ -142,43 +185,109 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
 
   return {
     async openJob(req: OpenJobRequest): Promise<OpenJobResponse> {
+      const estimatedUnits = requirePositiveSafeInteger(req.estimatedUnits, 'estimated_units');
+      const maxTotalUnits =
+        req.maxTotalUnits === undefined
+          ? undefined
+          : requirePositiveSafeInteger(req.maxTotalUnits, 'max_total_units');
+      if (maxTotalUnits !== undefined && maxTotalUnits < estimatedUnits) {
+        throw invalidContract('max_total_units must be greater than or equal to estimated_units');
+      }
       const raw = asRecord(
         await call('POST', '/v1/jobs', {
           capability: req.capability,
           offering: req.offering,
-          estimated_units: req.estimatedUnits,
-          ...(req.maxTotalUnits !== undefined ? { max_total_units: req.maxTotalUnits } : {}),
-        }),
+          transport: req.transport,
+          estimated_units: estimatedUnits,
+          ...(maxTotalUnits !== undefined ? { max_total_units: maxTotalUnits } : {}),
+        }, { 'Idempotency-Key': requireText(req.idempotencyKey, 'idempotency key') }),
+      );
+      const protocol = requireText(raw['protocol'], 'protocol');
+      if (protocol !== 'paid-job/v1') {
+        throw invalidContract(`unsupported protocol ${protocol}`);
+      }
+      const transport = requireTransport(raw['transport']);
+      if (transport !== req.transport) {
+        throw invalidContract(`transport drift: requested ${req.transport}, received ${transport}`);
+      }
+      const brokerUrl = requireUrl(raw['broker_url'], 'broker_url');
+      const settleEndpoint = requireLocEndpoint(
+        raw['settle_endpoint'],
+        'settle_endpoint',
+        cfg.baseUrl,
       );
       return {
-        jobId: str(raw['job_id']),
-        workId: str(raw['work_id']),
-        brokerUrl: str(raw['broker_url']),
-        mode: str(raw['mode']),
-        paymentEnvelope: str(raw['payment_envelope']),
-        expectedValueWei: str(raw['expected_value_wei']),
-        fundedValueWei: str(raw['funded_value_wei']),
-        settleEndpoint: str(raw['settle_endpoint']),
-        openedAt: str(raw['opened_at']),
+        jobId: requireText(raw['job_id'], 'job_id'),
+        requestId: requireText(raw['request_id'], 'request_id'),
+        workId: requireText(raw['work_id'], 'work_id'),
+        brokerUrl,
+        protocol,
+        transport,
+        workUnit: requireText(raw['work_unit'], 'work_unit'),
+        paymentEnvelope: requireText(raw['payment_envelope'], 'payment_envelope'),
+        expectedValueWei: requireUnsignedIntegerText(raw['expected_value_wei'], 'expected_value_wei'),
+        fundedValueWei: requireUnsignedIntegerText(raw['funded_value_wei'], 'funded_value_wei'),
+        settleEndpoint,
+        openedAt: requireTimestamp(raw['opened_at'], 'opened_at'),
       };
     },
 
-    async settleJob(jobId: string, req: SettleJobRequest): Promise<SettleJobResponse> {
+    async settleJob(
+      settleEndpoint: string,
+      jobId: string,
+      req: SettleJobRequest,
+    ): Promise<SettleJobResponse> {
+      const normalizedSettleEndpoint = requireLocEndpoint(
+        settleEndpoint,
+        'settle_endpoint',
+        cfg.baseUrl,
+      );
+      const normalizedJobId = requireText(jobId, 'job id');
+      const actualUnits = requireSafeUnsignedInteger(req.actualUnits, 'actual_units');
+      const brokerJobId = requireText(req.brokerJobId, 'broker_job_id');
+      const workUnit = requireText(req.workUnit, 'work_unit');
+      const settlement = requireSettlementEnvelope(req.settlement);
+      assertSettlementRequestMatches(settlement.payload, {
+        actualUnits,
+        brokerJobId,
+        workUnit,
+        ...(req.outcome !== undefined ? { outcome: requireText(req.outcome, 'outcome') } : {}),
+      });
       const raw = asRecord(
-        await call('POST', `/v1/jobs/${encodeURIComponent(jobId)}/settle`, {
-          actual_units: req.actualUnits,
+        await call('POST', normalizedSettleEndpoint, {
+          actual_units: actualUnits,
+          broker_job_id: brokerJobId,
+          work_unit: workUnit,
           ...(req.outcome !== undefined ? { outcome: req.outcome } : {}),
-          ...(req.settlement !== undefined ? { settlement: req.settlement } : {}),
+          settlement,
         }),
       );
+      const responseJobId = requireText(raw['job_id'], 'job_id');
+      if (responseJobId !== normalizedJobId) {
+        throw invalidContract(`job identity drift: requested ${normalizedJobId}, received ${responseJobId}`);
+      }
+      const responseActualUnits = requireSafeUnsignedInteger(raw['actual_units'], 'actual_units');
+      if (responseActualUnits !== actualUnits) {
+        throw invalidContract(
+          `settled unit drift: requested ${actualUnits}, received ${responseActualUnits}`,
+        );
+      }
+      const payloadWorkId = requireText(settlement.payload['work_id'], 'settlement.payload.work_id');
+      const responseWorkId = requireText(raw['work_id'], 'work_id');
+      if (responseWorkId !== payloadWorkId) {
+        throw invalidContract(
+          `payment identity drift: settlement ${payloadWorkId}, received ${responseWorkId}`,
+        );
+      }
       return {
-        jobId: str(raw['job_id']),
-        workId: str(raw['work_id']),
-        actualUnits: num(raw['actual_units']),
-        billedValueWei: str(raw['billed_value_wei']),
-        refundWei: str(raw['refund_wei']),
-        outcome: str(raw['outcome']),
-        closedAt: str(raw['closed_at']),
+        jobId: responseJobId,
+        workId: responseWorkId,
+        actualUnits: responseActualUnits,
+        billedValueWei: requireUnsignedIntegerText(raw['billed_value_wei'], 'billed_value_wei'),
+        refundWei: requireUnsignedIntegerText(raw['refund_wei'], 'refund_wei'),
+        outcome: requireText(raw['outcome'], 'outcome'),
+        closedAt: requireTimestamp(raw['closed_at'], 'closed_at'),
+        capStatus: requireCapStatus(raw['cap_status']),
       };
     },
 
@@ -188,15 +297,22 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
       return items.map((item) => {
         const cap = asRecord(item);
         const offerings = Array.isArray(cap['offerings']) ? cap['offerings'] : [];
+        const capabilityEstimator = parseWorkUnitEstimator(cap['work_unit_estimator']);
         return {
           name: str(cap['name']),
           workUnit: strOrNull(cap['work_unit']),
+          ...(capabilityEstimator ? { estimator: capabilityEstimator } : {}),
           offerings: offerings.map((o) => {
             const off = asRecord(o);
+            const job = asRecord(off['job']);
+            const estimator = parseWorkUnitEstimator(off['work_unit_estimator']);
             return {
               id: str(off['id']),
               pricePerWorkUnitWei: strOrNull(off['price_per_work_unit_wei']),
               workUnit: strOrNull(off['work_unit']),
+              ...(estimator ? { estimator } : {}),
+              protocol: str(off['protocol']),
+              transports: parseJobTransports(job['transports']),
               extra: asRecord(off['extra']),
             };
           }),
@@ -238,6 +354,200 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
   };
 }
 
+function parseWorkUnitEstimator(value: unknown): LocWorkUnitEstimator | null {
+  if (value === undefined || value === null) return null;
+  const estimator = asRecord(value);
+  return {
+    id: requireText(estimator['id'], 'work_unit_estimator.id'),
+    rounding: requireText(estimator['rounding'], 'work_unit_estimator.rounding'),
+    exactness: requireText(estimator['exactness'], 'work_unit_estimator.exactness'),
+    fixtures: strOrNull(estimator['fixtures']),
+  };
+}
+
+function parseJobTransports(value: unknown): JobTransport[] {
+  if (!Array.isArray(value) || value.length === 0) return [];
+  if (value.some((item) => item !== 'unary' && item !== 'stream' && item !== 'multipart')) {
+    throw new Error('LOC capability contains an unsupported paid-job transport');
+  }
+  return value as JobTransport[];
+}
+
+function requireText(value: unknown, field: string): string {
+  const result = str(value).trim();
+  if (!result) throw invalidContract(`missing ${field}`);
+  return result;
+}
+
+function requireTransport(value: unknown): JobTransport {
+  if (value === 'unary' || value === 'stream' || value === 'multipart') return value;
+  throw invalidContract(`unsupported transport ${String(value)}`);
+}
+
+function requireUrl(value: unknown, field: string): string {
+  const result = requireText(value, field);
+  try {
+    const url = new URL(result);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('bad scheme');
+  } catch {
+    throw invalidContract(`invalid ${field}`);
+  }
+  return result;
+}
+
+function requireLocEndpoint(value: unknown, field: string, baseUrl: string): string {
+  const result = requireText(value, field);
+  if (result.startsWith('/')) return result;
+  const endpoint = requireUrl(result, field);
+  if (new URL(endpoint).origin !== new URL(baseUrl).origin) {
+    throw invalidContract(`${field} must use the LOC origin`);
+  }
+  return endpoint;
+}
+
+function requireUnsignedIntegerText(value: unknown, field: string): string {
+  const result = requireText(value, field);
+  if (!/^\d+$/.test(result)) throw invalidContract(`invalid ${field}`);
+  return result;
+}
+
+function requireSafeUnsignedInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidContract(`invalid ${field}`);
+  }
+  return value;
+}
+
+function requirePositiveSafeInteger(value: unknown, field: string): number {
+  const result = requireSafeUnsignedInteger(value, field);
+  if (result === 0) throw invalidContract(`invalid ${field}`);
+  return result;
+}
+
+function requireTimestamp(value: unknown, field: string): string {
+  const result = requireText(value, field);
+  if (Number.isNaN(Date.parse(result))) throw invalidContract(`invalid ${field}`);
+  return result;
+}
+
+function requireSettlementEnvelope(value: unknown): SettlementEnvelope {
+  const envelope = asRecord(value);
+  assertExactKeys(envelope, ['payload', 'signature'], 'settlement');
+  const payload = asRecord(envelope['payload']);
+  if (Object.keys(payload).length === 0) throw invalidContract('missing settlement.payload');
+  const signature = asRecord(envelope['signature']);
+  assertExactKeys(signature, ['algorithm', 'canonicalization', 'value'], 'settlement.signature');
+  if (signature['algorithm'] !== 'secp256k1') {
+    throw invalidContract('unsupported settlement signature algorithm');
+  }
+  if (signature['canonicalization'] !== 'jcs') {
+    throw invalidContract('unsupported settlement canonicalization');
+  }
+  const signatureValue = requireText(signature['value'], 'settlement.signature.value');
+  if (!/^0x[0-9a-fA-F]{130}$/.test(signatureValue)) {
+    throw invalidContract('invalid settlement signature value');
+  }
+  return {
+    payload,
+    signature: {
+      algorithm: 'secp256k1',
+      canonicalization: 'jcs',
+      value: signatureValue,
+    },
+  };
+}
+
+function assertSettlementRequestMatches(
+  payload: Record<string, unknown>,
+  request: { actualUnits: number; brokerJobId: string; workUnit: string; outcome?: string },
+): void {
+  const payloadActual = requireUnsignedIntegerText(payload['actual_units'], 'settlement.payload.actual_units');
+  if (payloadActual !== String(request.actualUnits)) {
+    throw invalidContract(
+      `actual unit drift: request ${request.actualUnits}, settlement ${payloadActual}`,
+    );
+  }
+  const payloadJobId = requireText(payload['job_id'], 'settlement.payload.job_id');
+  if (payloadJobId !== request.brokerJobId) {
+    throw invalidContract(
+      `broker job identity drift: request ${request.brokerJobId}, settlement ${payloadJobId}`,
+    );
+  }
+  const payloadWorkUnit = requireText(
+    payload['work_unit_name'],
+    'settlement.payload.work_unit_name',
+  );
+  if (payloadWorkUnit !== request.workUnit) {
+    throw invalidContract(
+      `work unit drift: request ${request.workUnit}, settlement ${payloadWorkUnit}`,
+    );
+  }
+  if (request.outcome !== undefined) {
+    const payloadOutcome = requireText(payload['outcome'], 'settlement.payload.outcome');
+    if (payloadOutcome !== request.outcome) {
+      throw invalidContract(
+        `outcome drift: request ${request.outcome}, settlement ${payloadOutcome}`,
+      );
+    }
+  }
+}
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  field: string,
+): void {
+  const extras = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (extras.length > 0) throw invalidContract(`unexpected ${field} fields: ${extras.join(', ')}`);
+}
+
+function requireCapStatus(value: unknown): LocCapStatus {
+  const raw = asRecord(value);
+  return {
+    sessionPctUsed: requireFraction(raw['session_pct_used'], 'cap_status.session_pct_used'),
+    spendPeriodPctUsed: requireNullableFraction(
+      raw['spend_period_pct_used'],
+      'cap_status.spend_period_pct_used',
+    ),
+    userBalancePctUsed: requireNullableFraction(
+      raw['user_balance_pct_used'],
+      'cap_status.user_balance_pct_used',
+    ),
+    operatorPoolPctUsed: requireNullableFraction(
+      raw['operator_pool_pct_used'],
+      'cap_status.operator_pool_pct_used',
+    ),
+    willRefuseNextRefill: requireBoolean(
+      raw['will_refuse_next_refill'],
+      'cap_status.will_refuse_next_refill',
+    ),
+    winddownReason:
+      raw['winddown_reason'] === null
+        ? null
+        : requireText(raw['winddown_reason'], 'cap_status.winddown_reason'),
+  };
+}
+
+function requireFraction(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw invalidContract(`invalid ${field}`);
+  }
+  return value;
+}
+
+function requireNullableFraction(value: unknown, field: string): number | null {
+  return value === null ? null : requireFraction(value, field);
+}
+
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw invalidContract(`invalid ${field}`);
+  return value;
+}
+
+function invalidContract(message: string): LocApiError {
+  return new LocApiError({ status: 502, code: 'loc_contract_invalid', message });
+}
+
 // ── error envelope parsing ──────────────────────────────────────────
 // LOC responds with {"error":{"code","message","details"}}; some
 // FastAPI surfaces use the legacy {"detail": "..."} shape.
@@ -274,7 +584,22 @@ function errorFromEnvelope(status: number, parsed: unknown, rawText: string): Lo
 function safeJson(text: string): unknown {
   if (!text) return null;
   try {
-    return JSON.parse(text);
+    const parseLosslessly = JSON.parse as (
+      input: string,
+      reviver: (key: string, value: unknown, context: { source?: string }) => unknown,
+    ) => unknown;
+    return parseLosslessly(text, (_key, value, context) => {
+      if (
+        typeof value === 'number' &&
+        Number.isInteger(value) &&
+        !Number.isSafeInteger(value) &&
+        context.source !== undefined &&
+        /^-?[0-9]+$/.test(context.source)
+      ) {
+        return context.source;
+      }
+      return value;
+    });
   } catch {
     return null;
   }
@@ -295,8 +620,4 @@ function str(value: unknown): string {
 function strOrNull(value: unknown): string | null {
   const s = str(value);
   return s.length > 0 ? s : null;
-}
-
-function num(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }

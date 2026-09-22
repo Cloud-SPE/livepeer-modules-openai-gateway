@@ -45,7 +45,7 @@ const UserDetail = z
     usage: z.object({
       totalRequests: z.number(),
       committedTotal: z.number(),
-      refundedTotal: z.number(),
+      failedTotal: z.number(),
       lastUsedAt: Timestamp.nullable(),
     }),
   })

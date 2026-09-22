@@ -82,7 +82,7 @@ non-negotiable secrets in production:
 | `IP_HASH_PEPPER` | Same, for IPs / verification / session tokens. | `openssl rand -hex 32` |
 | `METRICS_TOKEN` | Bearer token to fetch `/metrics`. Optional; deployer's choice between this and front-edge basic auth. | `openssl rand -hex 32` |
 | `RESEND_API_KEY` | Email delivery. Optional but strongly recommended. | from your Resend dashboard |
-| `RESEND_BASE_URL` | Override the Resend email API endpoint. Optional. | `https://api.resend.com/emails` |
+| `RESEND_BASE_URL` | Resend-compatible API origin; the SDK appends `/emails`. | `https://api.resend.com` |
 | `LOC_API_KEY` | Auth for the LOC clearinghouse (sent as `X-API-Key`). Required for `/v1/*`. | from the LOC portal |
 
 **Pepper rotation**: changing `API_KEY_HASH_PEPPER` invalidates every
@@ -102,25 +102,25 @@ daemons. It delegates route selection and payment minting to the LOC
 (Livepeer Open Clearinghouse). Per `/v1/*` request the gateway:
 
 1. opens a job (`POST /v1/jobs {capability, offering, estimated_units}`);
-   the LOC selects a route, mints the payment envelope, and charges the
-   operator's credit balance the **full estimate** at issuance;
+   the LOC selects a route, mints the payment envelope, and encumbers the
+   funded ceiling;
 2. forwards the request to the returned `broker_url` with the
    `payment_envelope` in the `Livepeer-Payment` header;
-3. settles actual usage afterwards (`POST /v1/jobs/{id}/settle
-   {actual_units, outcome}`), and the LOC refunds the unused part.
+3. retrieves the broker's signed terminal claim independently and submits
+   that exact evidence to `POST /v1/jobs/{id}/settle`.
 
-Settlement runs in a durable background task, so a missed settle only
-over-pays the estimate — it is never lost.
+Claim lookup and LOC settlement run in durable background tasks. Gateway
+response bodies and local estimates are never settlement evidence.
 
 ### Config
 
 ```bash
-LOC_BASE_URL=https://loc.cloudspe.com   # default
+LOC_BASE_URL=http://127.0.0.1:8088      # localhost pilot
 LOC_API_KEY=…                           # required; sent as X-API-Key
 LOC_TIMEOUT_MS=30000
 LOC_SETTLE_INTERVAL_MS=15000            # background settler cadence
-LOC_SETTLE_MAX_ATTEMPTS=20              # per-job settle retries
-LOC_JOB_RETRIES=2                       # job-open retries on 429/5xx/mode-mismatch
+LOC_SETTLE_ALERT_ATTEMPTS=20            # alert threshold; retries do not abandon
+LOC_OPEN_MAX_ATTEMPTS=3                 # identical idempotent, backoff-spaced attempts
 ```
 
 ### Funding
@@ -152,16 +152,29 @@ $EDITOR .env   # fill every required value, incl. LOC_API_KEY
 # 2. build
 docker compose build gateway
 
-# 3. full stack (db + gateway)
-docker compose up -d
+# 3. localhost pilot (db + host-networked gateway, foreground)
+make pilot
 ```
 
-There are no daemon sidecars to run. The gateway talks to the external
-LOC over HTTPS; confirm reachability before serving users:
+There are no daemon sidecars to run. The gateway talks to the separately
+shell-run localhost LOC. Host networking is required because LOC returns a
+`127.0.0.1:8411` broker URL; a normal bridged container would call itself.
+Ports 8088 and 8411 must remain loopback-only. Confirm reachability before
+serving users:
 
 ```bash
-make loc-smoke   # opens a 1-unit job and settles 0 against the live LOC
+make loc-smoke   # executes a paid job and submits its signed settlement
 ```
+
+The pilot supports `openai:chat-completions/default` over unary and stream.
+LOC now passes the `multipart-audio-duration/v1` estimator metadata through,
+and this gateway reproduces that ceiling locally without a Modules runtime or
+build dependency. LOC's 14/14 real-process matrix passes against clean Modules
+`215e8a4`, including the payment expected-value and broker terminal-evidence
+fixes. Modules release record `1241d76` publishes immutable digests from that
+source. Pin those digests rather than mutable `v2.0.0` tags, then require the
+image-based unary/stream/multipart conformance pass before advertising
+transcription as ready.
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.
@@ -204,7 +217,7 @@ Validate end-to-end against a real orchestrator:
    check `docker compose logs gateway` — it logs the LOC job it opened
    and the broker it forwarded to.
 
-4. **Confirm the reservation row committed and enqueued a settle**:
+4. **Confirm the gateway outcome, signed claim, and LOC settlement**:
 
    ```bash
    docker compose exec db psql -U openai_service -c \
@@ -215,15 +228,23 @@ Validate end-to-end against a real orchestrator:
              state,
              estimated_work_units,
              committed_work_units,
+             loc_request_id,
+             broker_job_id,
+             settlement_lookup_state,
+             broker_actual_units,
+             broker_debited_units,
+             broker_billed_value_wei,
              settle_state,
-             settle_actual_units,
              latency_ms
       FROM usage_reservations ORDER BY created_at DESC LIMIT 5;"
    ```
 
-   The latest row should be `state=committed` with a non-null
-   `committed_work_units`, a populated `loc_job_id`, and `settle_state`
-   moving from `pending` to `settled` once the background settler runs.
+   The latest row should be `state=committed`, have all paid-job identities,
+   capture `settlement_envelope`, and move `settle_state` from `pending` to
+   `settled`. A lost LOC response can instead produce a terminal
+   `job_already_settled` acknowledgement; the gateway still marks settlement
+   successful and retains the original broker claim, while LOC result-detail
+   columns may remain null. `committed_work_units` is not accounting authority.
 
 5. **Confirm the models cache populated from the LOC catalog**:
 
@@ -231,7 +252,8 @@ Validate end-to-end against a real orchestrator:
    docker compose exec db psql -U openai_service -c \
      "SELECT model_id,
              capability,
-             interaction_mode,
+             protocol,
+             transports,
              active
       FROM models
       WHERE active = true
@@ -323,9 +345,9 @@ docker compose exec -T db pg_dump -U openai_service \
   openai_service > openai_service-$(date +%F).pgdump
 ```
 
-Drive this from cron or a systemd timer; encrypt and ship to S3 /
-GCS / Backblaze. Keep at least 7 days of point-in-time backups
-locally + 30 days off-site.
+Run this explicitly from a managed shell when a backup is needed; encrypt and
+ship it to S3 / GCS / Backblaze. This localhost deployment does not install
+cron entries, systemd units, or host-boot services.
 
 ### Restore
 
@@ -361,29 +383,29 @@ For zero-downtime schema changes:
 3. Roll out follow-up migrations / cleanups after the new gateway is
    serving 100% of traffic.
 
-#### Upgrade note — LOC settlement (`0004_loc_settlement.sql`)
+#### Upgrade note — paid-job/v1 (`0004` through `0009`)
 
-The move to the LOC clearinghouse adds one migration,
-`0004_loc_settlement.sql`, which is the operationally relevant one for
-upgrades from the daemon-era gateway. It adds nullable settle columns
-only, so the rollout is forward-compatible:
-
-- `usage_reservations` gains `loc_job_id`, `settle_state`
-  (`NULL | pending | settled | failed`), `settle_actual_units`, and
-  `settle_outcome`, plus a partial index on `settle_state='pending'`
-  that the background settler drains.
+The breaking paid-job migration spans `0004_loc_settlement.sql` through
+`0009_usage_outcome_not_refund.sql`. Together they add the durable LOC and
+broker identities, protocol/transport catalog axes, signed settlement and
+terminal-evidence storage, request-ID recovery states, capability-scoped model
+identity, and the customer-outcome state `failed`. Migration `0005` deliberately
+clears the rebuildable model cache and removes the v0 interaction-mode column;
+there is no dual-protocol rollout.
 
 Operationally:
 
 1. Deploy the new gateway image.
-2. Let the boot-time migration runner apply `0004_loc_settlement.sql`.
-3. Confirm new `/v1/*` traffic populates `loc_job_id` and that
-   `settle_state` moves `pending → settled` as the settler runs.
+2. Let the boot-time migration runner apply every pending migration through
+   `0009_usage_outcome_not_refund.sql`.
+3. Confirm the LOC catalog repopulates `models` with `protocol=paid-job/v1`
+   and declared transports.
+4. Confirm new `/v1/*` traffic populates `loc_request_id`, `broker_job_id`, and
+   signed evidence, then reaches terminal LOC settlement.
 
-The earlier `0002`/`0003` migrations (route/quote diagnostic columns
-from the daemon era) remain applied; they are simply no longer written
-to. There are no daemon images to align — the gateway only needs a
-reachable LOC and a valid `LOC_API_KEY`.
+There are no daemon or Modules images to align in this repository. The gateway
+image needs only Postgres plus a reachable LOC and valid `LOC_API_KEY`; it uses
+the broker URL returned for each LOC job.
 
 ---
 
@@ -445,50 +467,101 @@ Prometheus scrapes `/metrics`. Surfaces:
 Recommended starter alerts:
 
 - 5xx rate above 1% sustained 5 min on `/v1/*`
-- `proxy_reservations_total{outcome="refunded"}` rising sharply
+- `proxy_reservations_total{outcome="failed"}` rising sharply
   vs `committed`
 - `pendingSettlements` (from `/health`) climbing — the settler can't
-  reach the LOC; refunds are delayed
+  reach the LOC; signed settlement is delayed
 - Event-loop lag > 100ms p95
 
 ---
 
 ## Upgrades
 
+### Breaking v2.0.0 cutover
+
+This is not a rolling dual-protocol upgrade. Do not run a v1 gateway beside a
+v2 gateway and do not send new work to the old broker contract after the
+cutover begins.
+
+Build and publish the release from the exact, clean tag. The same checked-in
+script runs locally and in tagged CI; publishing produces a multi-architecture
+manifest and prints the immutable digest without moving `latest`:
+
 ```bash
-# 1. Pull the new image (or rebuild from a new tag)
-git fetch origin && git checkout v1.x
-docker compose build gateway
+git checkout v2.0.0
+PUSH=1 ./infra/scripts/build-images.sh
+```
 
-# 2. Apply
-docker compose up -d gateway
+Record the printed `tztcloud/openai-service-gateway@sha256:…` reference as the
+gateway release input used below.
 
-# 3. Watch for clean boot:
+```bash
+# 1. Verify the external release gate before touching the running gateway.
+# Record the LOC revision and immutable Modules image digests that passed the
+# real-process matrix; mutable v2.0.0 tags are not sufficient evidence.
+
+# 2. Stop NEW /v1/* traffic at the reverse proxy, but leave the old gateway
+# running so its durable settlement workers can drain.
+
+# 3. Wait for gateway accounting to drain.
+curl -sf http://127.0.0.1:4001/health | jq '.pendingSettlements'
+# Continue only when this is 0. Also inspect the admin usage view for
+# settlement_lookup_pending, loc_settle_pending, and permanent failures.
+
+# 4. Take a Postgres backup after the drain and before migration.
+docker compose exec -T db pg_dump \
+  -U "${POSTGRES_USER:-openai_service}" "${POSTGRES_DB:-openai_service}" \
+  | gzip > "openai-service-pre-v2-$(date +%Y%m%d-%H%M%S).sql.gz"
+
+# 5. Check out the exact gateway release and pull the pinned image.
+git fetch origin --tags
+git checkout v2.0.0
+export GATEWAY_IMAGE='tztcloud/openai-service-gateway@sha256:<published-digest>'
+docker pull "$GATEWAY_IMAGE"
+REQUIRE_IMMUTABLE_IMAGE=true RELEASE_IMAGE="$GATEWAY_IMAGE" \
+  RELEASE_REVISION="$(git rev-parse HEAD)" make release-check
+make release-config GATEWAY_IMAGE="$GATEWAY_IMAGE" >/dev/null
+
+# 6. Start it in the managed foreground shell. Do not install a boot service.
+GATEWAY_IMAGE="$GATEWAY_IMAGE" docker compose \
+  -f docker-compose.yml -f docker-compose.release.yml up gateway
+
+# 7. Watch for clean boot:
 docker compose logs -f gateway
 # Look for:
-#   [migrations] migration NNNN_xxx.sql: applied
+#   migrations through 0009 applied
 #   Server listening at http://0.0.0.0:4001
 
-# 4. Confirm /health is 200:
+# 8. Confirm health and the LOC-backed catalog:
 curl -sf http://localhost:4001/health | jq .
+curl -sf http://localhost:4001/v1/models \
+  -H "Authorization: Bearer $SMOKE_API_KEY" | jq .
 
-# 5. Smoke a /v1/* call as in "Real-broker validation" §3.
+# 9. Run unary, stream, and exact multipart smokes. The runner logs in through
+# the portal and verifies every durable reservation reaches signed evidence and
+# terminal LOC settlement.
+OPENAI_API_KEY="$SMOKE_API_KEY" make live-conformance
+
+# 10. Re-enable /v1/* traffic and watch pending settlements, LOC-open errors,
+# broker protocol errors, and duplicate execution/debit indicators.
 ```
 
 ### Rollback
 
-If the new gateway image misbehaves:
+Do not reactivate the v1 protocol path after v2 has admitted work. A v1 image
+cannot safely reconcile v2 identities and signed evidence, and database
+migration `0005` deliberately clears the rebuildable v0 model cache.
 
-```bash
-git checkout v1.previous
-docker compose build gateway
-docker compose up -d gateway
-```
+- If no v2 job was admitted, stop the v2 process, restore the pre-cutover
+  database backup, and return traffic to the pre-cutover deployment.
+- If any v2 job was admitted, keep the v2 database and settlement workers
+  available, disable new traffic, and fix forward. Preserve every LOC job id,
+  broker request/job id, and signed claim.
+- Never edit or reverse an applied migration in place. A corrective schema
+  change is a new forward migration.
 
-Watch out for **migration rollback**: a forward migration that's
-already been applied won't be undone by checking out the old image.
-If you need to roll a migration back, write a fresh migration that
-undoes it (don't edit history).
+The normal recovery is fix-forward. Restoring the pre-v2 backup is permitted
+only when no v2 accounting identity can be lost.
 
 ---
 
@@ -501,7 +574,9 @@ undoes it (don't edit history).
 | `/v1/models` returns empty `data: []` | LOC advertises no offerings, or catalog refresh hasn't run yet | gateway logs; `GET /admin/registry/loc`; wait one refresh cycle |
 | Every `/v1/*` returns 503 | LOC unreachable or job-open failing | gateway logs (logs each opened job + retries) |
 | `/v1/*` errors with insufficient funds | LOC credit balance exhausted | `GET /admin/registry/loc` (balance); top up in the LOC portal |
-| `/health` `pendingSettlements` climbing | Settler can't reach the LOC; refunds delayed (not lost) | gateway logs; LOC reachability |
+| `/health` `pendingSettlements` climbing | Settler can't reach the LOC; signed settlement delayed (not lost) | gateway logs; LOC reachability |
+| Transcription returns `protocol_response_invalid` after broker `insufficient_balance` | Deployed payer credited less expected value than the funded ceiling, or broker omitted the required zero-unit terminal evidence | payer/payee/broker logs; active paid-job migration release gates |
+| LOC rejects settlement with `usage_ceiling_exceeded` | Broker measured more work than the gateway-funded maximum; for chat, verify the worker honored `max_tokens` / `max_completion_tokens` | reservation's estimated and broker actual units; worker logs |
 | Verification emails not arriving | RESEND_API_KEY missing/invalid | gateway logs — search for `verification email send failed` |
 | Operator can't log into admin | ADMIN_TOKEN env var missing or mismatched | `docker compose exec gateway env | grep ADMIN_TOKEN` |
 | Sudden 503s after redeploy | Migration hung the gateway boot | gateway logs — last `[migrations]` line |
