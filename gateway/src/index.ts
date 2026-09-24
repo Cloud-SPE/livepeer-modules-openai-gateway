@@ -54,6 +54,7 @@ async function main(): Promise<void> {
     baseUrl: config.locBaseUrl,
     apiKey: config.locApiKey,
     timeoutMs: config.locTimeoutMs,
+    jobOpenTimeoutMs: config.locJobOpenTimeoutMs,
   });
   try {
     const locHealth = await loc.health();

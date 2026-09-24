@@ -52,7 +52,8 @@ removing the product.
 
 `/v1/models` is whatever the LOC capability catalog advertises right now.
 No hardcoded list. No curated catalog. If a model disappears from the
-catalog, it disappears from the API within one refresh cycle.
+fresh complete catalog, it disappears from the API within one refresh cycle.
+Partial discovery cannot prove absence; stale discovery cannot refresh the cache.
 
 ## 8. Zero-build frontend, light DOM only
 

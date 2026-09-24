@@ -41,3 +41,15 @@ test('non-admission audit and conservative charge remain distinct LOC observatio
     assert.deepEqual(h.events,[['status','local',observed]]);
   }
 });
+
+test('rejected admission remains open until LOC reports verified zero-billed closure', async () => {
+  const h = harness();
+  h.store.opens = async () => [];
+  const audit: JobStatus = { ...status, state: 'open', accountingOutcome: 'non_admission_audit', actualUnits: null, billedValueWei: null, closedAt: null };
+  const closed: JobStatus = { ...status, actualUnits: '0', billedValueWei: '0' };
+  h.loc.getJob = async () => audit;
+  await runRecoveryOnce(h.store, h.loc);
+  h.loc.getJob = async () => closed;
+  await runRecoveryOnce(h.store, h.loc);
+  assert.deepEqual(h.events, [['status', 'local', audit], ['status', 'local', closed]]);
+});

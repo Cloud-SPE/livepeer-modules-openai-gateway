@@ -16,8 +16,21 @@ import {
 
 const ADMIN_SECURITY = [{ adminToken: [] as string[] }];
 
+const CatalogMetadata = z.object({
+  completeness: z.enum(['UNINITIALIZED', 'PARTIAL', 'COMPLETE']),
+  stale: z.boolean(),
+  coverage: z.record(z.string(), z.number().int().nonnegative()),
+  snapshot_at: z.string().nullable(),
+  evaluated_at: z.string(),
+  discovery_scope: z.string(),
+  discovery_scope_authoritative: z.boolean(),
+  discovery_observed_at: z.string().nullable(),
+  discovery_valid_until: z.string().nullable(),
+  coverage_valid_until: z.string().nullable(),
+}).nullable();
+
 const CandidatesResponse = z
-  .object({ data: z.array(RouteCandidatePublic) })
+  .object({ data: z.array(RouteCandidatePublic), catalog: CatalogMetadata })
   .meta({ id: 'AdminRegistryCandidates' });
 
 const LocStatusResponse = z
@@ -64,6 +77,7 @@ const RegistrySummaryRow = z.object({
 
 const RegistrySummaryResponse = z
   .object({
+    catalog: CatalogMetadata,
     liveCandidates: z.number(),
     liveModels: z.number(),
     cachedActiveModels: z.number(),
@@ -148,10 +162,11 @@ export async function registerAdminRegistryRoutes(
       },
     },
     async () => {
-      const [candidates, rows] = await Promise.all([
+      const [snapshot, rows] = await Promise.all([
         deps.registryCatalog.inspect(),
         modelsRepo.listAll(deps.db),
       ]);
+      const { candidates, catalog } = snapshot;
       const activeRows = rows.filter((row) => row.active);
       const latestSnapshotAt = rows.reduce<Date | null>((latest, row) => {
         if (!latest || row.snapshotAt > latest) return row.snapshotAt;
@@ -166,6 +181,7 @@ export async function registerAdminRegistryRoutes(
       ).sort();
       const cachedModelIds = uniq(activeRows.map((row) => row.modelId)).sort();
       return {
+        catalog,
         liveCandidates: candidates.length,
         liveModels: liveModelIds.length,
         cachedActiveModels: cachedModelIds.length,
@@ -194,8 +210,9 @@ export async function registerAdminRegistryRoutes(
       },
     },
     async () => {
-      const candidates = await deps.registryCatalog.inspect();
+      const { candidates, catalog } = await deps.registryCatalog.inspect();
       return {
+        catalog,
         data: candidates.map((c) => ({
           brokerUrl: c.brokerUrl,
           capability: c.capability,

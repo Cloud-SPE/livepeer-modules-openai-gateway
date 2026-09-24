@@ -16,6 +16,7 @@ import type {
   JobTransport,
   LocCapability,
   LocClient,
+  LocCatalogMetadata,
   LocWorkUnitEstimator,
 } from '../loc/client.js';
 
@@ -44,25 +45,37 @@ export interface RouteCandidate {
   constraints: JsonValue | null;
 }
 
+export interface CatalogSnapshot {
+  candidates: RouteCandidate[];
+  catalog: LocCatalogMetadata | null;
+}
+
+/** Expired coverage is not proof that missing models disappeared. */
+export function catalogIsStale(catalog: LocCatalogMetadata | null, now = Date.now()): boolean {
+  return catalog !== null && (catalog.stale ||
+    [catalog.discovery_valid_until, catalog.coverage_valid_until]
+      .some((value) => value !== null && Date.parse(value) <= now));
+}
+
 export interface RegistryCatalog {
-  inspect(): Promise<RouteCandidate[]>;
+  inspect(): Promise<CatalogSnapshot>;
   close?(): Promise<void>;
 }
 
 const INSPECT_TTL_MS = 15_000;
 
 export function createRegistryCatalog(loc: LocClient): RegistryCatalog {
-  let cached: { at: number; candidates: RouteCandidate[] } | null = null;
+  let cached: { at: number; snapshot: CatalogSnapshot } | null = null;
 
   return {
-    async inspect(): Promise<RouteCandidate[]> {
-      if (cached && Date.now() - cached.at < INSPECT_TTL_MS) {
-        return cached.candidates;
+    async inspect(): Promise<CatalogSnapshot> {
+      if (cached && Date.now() - cached.at < INSPECT_TTL_MS && !catalogIsStale(cached.snapshot.catalog)) {
+        return cached.snapshot;
       }
-      const capabilities = await loc.listCapabilities();
-      const candidates = flattenCapabilities(capabilities);
-      cached = { at: Date.now(), candidates };
-      return candidates;
+      const { items, catalog } = await loc.listCapabilities();
+      const snapshot = { candidates: flattenCapabilities(items), catalog };
+      cached = { at: Date.now(), snapshot };
+      return snapshot;
     },
   };
 }

@@ -410,7 +410,7 @@ test('listCapabilities flattens snake_case payload', async () => {
     }),
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
-      const caps = await client.listCapabilities();
+      const { items: caps } = await client.listCapabilities();
       assert.equal(caps.length, 1);
       assert.equal(caps[0]!.name, 'openai:chat-completions');
       assert.equal(caps[0]!.offerings[0]!.id, 'llama-3');
@@ -455,7 +455,7 @@ test('listCapabilities preserves a client-reproducible work-unit estimator', asy
     }),
     async (baseUrl) => {
       const client = createLocClient({ baseUrl, apiKey: 'k', timeoutMs: 5000 });
-      const capability = (await client.listCapabilities())[0]!;
+      const capability = (await client.listCapabilities()).items[0]!;
       const offering = capability.offerings[0]!;
       assert.equal(offering.workUnit, 'seconds');
       assert.deepEqual(offering.estimator, {
@@ -473,7 +473,7 @@ test('current catalog rejects unsafe denominators and retains exact price scalin
   for (const denominator of ['1000', '9007199254740993', '0']) {
     await withMockLoc(() => ({status:200,body:{items:[{name:'c',work_unit:'tokens',offerings:[{id:'o',price_per_work_unit_wei:'100',units_per_price:denominator,work_unit:'tokens',protocol:'paid-job/v1',job:{transports:['unary']}}]}]}}), async baseUrl => {
       const loc=createLocClient({baseUrl,apiKey:'key',timeoutMs:1000});
-      if (denominator==='1000') assert.equal((await loc.listCapabilities())[0]!.offerings[0]!.unitsPerPrice,1000);
+      if (denominator==='1000') assert.equal((await loc.listCapabilities()).items[0]!.offerings[0]!.unitsPerPrice,1000);
       else await assert.rejects(loc.listCapabilities(),LocApiError);
     });
   }
@@ -494,5 +494,52 @@ test('LOC status preserves accounting authority and rejects cross-job responses'
     assert.equal(result.accountingOutcome,'conservative_full_charge');
     assert.equal(result.actualUnits,null);
     await assert.rejects(loc.getJob('wrong'),/identity drift/);
+  });
+});
+
+test('catalog preserves completeness, coverage, validity and stale fallback metadata', async () => {
+  const { catalogMetadata } = await import('./catalog-fixtures.js');
+  for (const metadata of [catalogMetadata(), catalogMetadata({ completeness: 'PARTIAL', stale: true }), null]) {
+    await withMockLoc(() => ({ status: 200, body: { items: [], catalog: metadata } }), async baseUrl => {
+      const loc = createLocClient({ baseUrl, apiKey: 'key', timeoutMs: 1000 });
+      assert.deepEqual(await loc.listCapabilities(), { items: [], catalog: metadata });
+    });
+  }
+  for (const body of [{}, { items: [], catalog: { completeness: 'invalid' } }]) {
+    await withMockLoc(() => ({ status: 200, body }), async baseUrl => {
+      const loc = createLocClient({ baseUrl, apiKey: 'key', timeoutMs: 1000 });
+      await assert.rejects(loc.listCapabilities(), LocApiError);
+    });
+  }
+});
+
+test('job creation gets its own timeout while discovery keeps the shorter budget', async t => {
+  const timeouts: number[] = [];
+  const original = AbortSignal.timeout;
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    timeouts.push(ms);
+    return original(ms);
+  });
+  await withMockLoc(() => ({ status: 503, body: { error: { code: 'WHOLESALE_FUNDING_UNVERIFIED', message: 'retry' } } }), async baseUrl => {
+    for (const jobOpenTimeoutMs of [undefined, 120_000]) {
+      const loc = createLocClient({ baseUrl, apiKey: 'key', timeoutMs: 1000, jobOpenTimeoutMs });
+      await assert.rejects(loc.openJob({ ...commitment, idempotencyKey: 'original', capability: 'c', offering: 'o', transport: 'unary', estimatedUnits: 1 }), LocApiError);
+      await assert.rejects(loc.listCapabilities(), LocApiError);
+    }
+  });
+  assert.deepEqual(timeouts, [90_000, 1000, 120_000, 1000]);
+});
+
+test('closed zero-billed LOC non-admission is accepted as terminal accounting', async () => {
+  await withMockLoc(() => ({ status: 200, body: {
+    job_id: 'j', request_id: 'r', work_id: 'a', state: 'closed',
+    accounting_outcome: 'broker_settled', broker_exchange_outcome: 'NOT_ADMITTED',
+    actual_units: 0, billed_value_wei: 0, closed_at: '2026-09-24T12:00:00Z',
+  } }), async baseUrl => {
+    const result = await createLocClient({ baseUrl, apiKey: 'key', timeoutMs: 1000 }).getJob('j');
+    assert.equal(result.state, 'closed');
+    assert.equal(result.actualUnits, '0');
+    assert.equal(result.billedValueWei, '0');
+    assert.equal(result.accountingOutcome, 'broker_settled');
   });
 });

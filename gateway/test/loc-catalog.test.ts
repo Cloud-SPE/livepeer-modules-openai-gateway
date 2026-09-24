@@ -120,3 +120,22 @@ test('catalog retains quoted units-per-price instead of assuming one', () => {
   }]}]);
   assert.equal(rows[0]!.unitsPerPrice,100);
 });
+
+test('catalog cache carries metadata and refreshes when coverage expires', async t => {
+  const { createRegistryCatalog } = await import('../src/registry/catalog.js');
+  const { catalogMetadata } = await import('./catalog-fixtures.js');
+  let now = Date.parse('2026-09-24T12:01:00Z');
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const metadata = catalogMetadata({ coverage_valid_until: new Date(now + 1000).toISOString() });
+  const catalog = createRegistryCatalog({ listCapabilities: async () => {
+    calls++;
+    return { items: [], catalog: metadata };
+  } } as unknown as import('../src/loc/client.js').LocClient);
+  assert.deepEqual((await catalog.inspect()).catalog, metadata);
+  await catalog.inspect();
+  assert.equal(calls, 1);
+  now += 1001;
+  await catalog.inspect();
+  assert.equal(calls, 2);
+});

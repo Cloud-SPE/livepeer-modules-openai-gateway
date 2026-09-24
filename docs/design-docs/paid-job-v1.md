@@ -89,6 +89,9 @@ identity. LOC state and accounting outcome stay separate from signed evidence:
 `conservative_full_charge` must not be conflated. Only a closed LOC state is
 recorded as terminal LOC accounting. Signed NOT_ADMITTED is audit evidence;
 it is not a gateway-generated refund or synthetic zero-unit settlement.
+After expiry, LOC may verify fenced non-admission, release the hold, and report
+closed/broker_settled with zero units and zero billed value. Status recovery
+records that terminal LOC decision without creating broker settlement evidence.
 
 Broker replay is accounting-only. The gateway reports
 `upstream_response_lost` and recovers the original exchange without executing

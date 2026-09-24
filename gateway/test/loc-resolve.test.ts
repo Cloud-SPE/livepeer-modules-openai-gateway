@@ -27,7 +27,7 @@ function candidate(overrides: Partial<RouteCandidate>): RouteCandidate {
 }
 
 function catalogOf(candidates: RouteCandidate[]): RegistryCatalog {
-  return { inspect: async () => candidates };
+  return { inspect: async () => ({ candidates, catalog: null }) };
 }
 
 const QWEN = candidate({

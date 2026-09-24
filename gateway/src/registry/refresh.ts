@@ -18,7 +18,9 @@ import { models, type NewModel } from '../schema/index.js';
 import type {
   RegistryCatalog,
   RouteCandidate,
+  CatalogSnapshot,
 } from './catalog.js';
+import { catalogIsStale } from './catalog.js';
 
 export interface StartRefreshInput {
   registryCatalog: RegistryCatalog;
@@ -34,9 +36,9 @@ export function startRegistryRefresh(input: StartRefreshInput): CancelRefresh {
   const { registryCatalog, db, intervalMs, log } = input;
 
   const run = async (): Promise<void> => {
-    const candidates = await registryCatalog.inspect();
-    const count = await upsertModelsFromSnapshot(db, candidates);
-    log.debug({ count }, 'registry refresh upserted models');
+    const snapshot = await registryCatalog.inspect();
+    const count = await upsertModelsFromSnapshot(db, snapshot);
+    log.debug({ count, catalog: snapshot.catalog }, 'registry refresh upserted models');
   };
 
   // Kick off immediately, then on interval. Don't await — we don't want
@@ -58,20 +60,23 @@ export function startRegistryRefresh(input: StartRefreshInput): CancelRefresh {
 
 /**
  * Convert RouteCandidate[] → models rows and upsert. Rows present in
- * the DB but missing from this snapshot are marked `active=false` so
- * `/v1/models` reflects current reality.
+ * the DB but missing from a fresh COMPLETE snapshot become inactive.
+ * Partial/legacy snapshots only upsert; stale/uninitialized snapshots do nothing.
  */
 export async function upsertModelsFromSnapshot(
   db: Db,
-  candidates: RouteCandidate[],
+  snapshot: CatalogSnapshot,
 ): Promise<number> {
-  const rows = candidatesToModelRows(candidates);
+  const { candidates, catalog } = snapshot;
+  if (catalogIsStale(catalog) || catalog?.completeness === 'UNINITIALIZED') return 0;
+  const observedAt = catalog ? new Date(catalog.snapshot_at ?? catalog.evaluated_at) : new Date();
+  const rows = candidatesToModelRows(candidates, observedAt);
 
   await db.transaction(async (tx) => {
-    // The table is a snapshot cache. Mark the previous snapshot inactive
-    // inside the transaction, then reactivate every row present now. This
-    // handles the same offering id appearing under multiple capabilities.
-    await tx.update(models).set({ active: false }).where(eq(models.active, true));
+    // Only a complete snapshot proves that omitted models disappeared.
+    if (catalog?.completeness === 'COMPLETE') {
+      await tx.update(models).set({ active: false }).where(eq(models.active, true));
+    }
     if (rows.length > 0) {
       await tx
         .insert(models)
@@ -114,7 +119,7 @@ export async function upsertModelsFromSnapshot(
  * extracts display fields from `extra.openai` (preferred) or `extra`
  * itself. Exported for unit tests.
  */
-export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] {
+export function candidatesToModelRows(candidates: RouteCandidate[], observedAt = new Date()): NewModel[] {
   const rowsByIdentity = new Map<string, NewModel>();
   for (const c of candidates) {
     const modelId = c.offering.trim();
@@ -148,7 +153,7 @@ export function candidatesToModelRows(candidates: RouteCandidate[]): NewModel[] 
       extraJson: (c.extra as unknown as NewModel['extraJson']) ?? null,
       constraintsJson: (c.constraints as unknown as NewModel['constraintsJson']) ?? null,
       active: true,
-      snapshotAt: new Date(),
+      snapshotAt: observedAt,
     });
   }
   return [...rowsByIdentity.values()];

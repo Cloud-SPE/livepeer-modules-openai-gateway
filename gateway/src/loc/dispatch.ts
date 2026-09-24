@@ -86,6 +86,13 @@ interface StreamDispatch extends DispatchCommon {
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const JOB_OPEN_RETRY_BASE_MS = 250;
 
+/** Keep recovery behind every foreground open and its exponential backoff. */
+export function jobOpenRecoveryGraceMs(timeoutMs: number, maxAttempts: number): number {
+  const backoffMs = JOB_OPEN_RETRY_BASE_MS * (2 ** (maxAttempts - 1) - 1);
+  return Math.max(300_000, timeoutMs * maxAttempts + backoffMs + 60_000);
+}
+
+
 export async function dispatchReqresp(opts: ReqRespDispatch): Promise<DispatchSuccess<httpReqresp.SendResult>> {
   const prepared = await prepareInvocation(opts.body as BodyInit | null, opts.contentType);
   return attemptJob(opts, 'unary', prepared, async (job) =>

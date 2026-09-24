@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   if (health.status !== 'ok') fail(`LOC health status: ${health.status}`);
   pass(`LOC health ok — version ${health.version}, env ${health.env}`);
 
-  const capabilities = await loc.listCapabilities();
+  const { items: capabilities } = await loc.listCapabilities();
   const selected = capabilities
     .find((item) => item.name === capability)
     ?.offerings.find((item) => item.id === offering);

@@ -41,6 +41,7 @@ const ConfigSchema = z.object({
   // opens a job per upstream call and settles actual units afterwards.
   locBaseUrl: z.string().url(),
   locApiKey: z.string().min(1),
+  locJobOpenTimeoutMs: z.coerce.number().int().positive().default(90000),
   locTimeoutMs: z.coerce.number().int().positive().default(30000),
   locSettleIntervalMs: z.coerce.number().int().positive().default(15000),
   locSettleAlertAttempts: z.coerce.number().int().positive().default(20),
@@ -97,6 +98,7 @@ export function loadConfig(): Config {
     fromEmail: process.env['FROM_EMAIL'],
     locBaseUrl: process.env['LOC_BASE_URL'],
     locApiKey: process.env['LOC_API_KEY'],
+    locJobOpenTimeoutMs: process.env['LOC_JOB_OPEN_TIMEOUT_MS'],
     locTimeoutMs: process.env['LOC_TIMEOUT_MS'],
     locSettleIntervalMs: process.env['LOC_SETTLE_INTERVAL_MS'],
     locSettleAlertAttempts: process.env['LOC_SETTLE_ALERT_ATTEMPTS'],

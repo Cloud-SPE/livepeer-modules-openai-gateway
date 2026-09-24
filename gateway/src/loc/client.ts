@@ -6,6 +6,7 @@ export interface LocClientConfig {
   baseUrl: string;
   apiKey: string;
   timeoutMs: number;
+  jobOpenTimeoutMs?: number;
 }
 
 export class LocApiError extends Error {
@@ -147,6 +148,25 @@ export interface LocCapability {
   offerings: LocOffering[];
 }
 
+/** LOC discovery metadata; absence is not evidence of a complete catalog. */
+export interface LocCatalogMetadata {
+  completeness: 'UNINITIALIZED' | 'PARTIAL' | 'COMPLETE';
+  stale: boolean;
+  coverage: Record<string, number>;
+  snapshot_at: string | null;
+  evaluated_at: string;
+  discovery_scope: string;
+  discovery_scope_authoritative: boolean;
+  discovery_observed_at: string | null;
+  discovery_valid_until: string | null;
+  coverage_valid_until: string | null;
+}
+
+export interface LocCapabilityCatalog {
+  items: LocCapability[];
+  catalog: LocCatalogMetadata | null;
+}
+
 export interface LocOrchestrator {
   ethAddress: string;
   workerUrl: string;
@@ -169,7 +189,7 @@ export interface LocClient {
   openJob(req: OpenJobRequest): Promise<OpenJobResponse>;
   getJob(jobId: string): Promise<JobStatus>;
   settleJob(settleEndpoint: string, jobId: string, req: SettleJobRequest): Promise<SettleJobResponse>;
-  listCapabilities(): Promise<LocCapability[]>;
+  listCapabilities(): Promise<LocCapabilityCatalog>;
   listOrchestrators(capability?: string): Promise<LocOrchestrator[]>;
   getBalance(): Promise<LocBalance>;
   health(): Promise<LocHealth>;
@@ -181,6 +201,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
     path: string,
     body?: unknown,
     additionalHeaders?: Record<string, string>,
+    timeoutMs = cfg.timeoutMs,
   ): Promise<unknown> => {
     const headers: Record<string, string> = {
       'X-API-Key': cfg.apiKey,
@@ -195,7 +216,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         redirect: 'error',
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(cfg.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       throw new LocApiError({
@@ -232,7 +253,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
           workload_request_digest: requirePattern(req.workloadRequestDigest, /^[0-9a-f]{64}$/, 'workload_request_digest'),
           caller_public_key: requirePattern(req.callerPublicKey, /^(02|03)[0-9a-f]{64}$/, 'caller_public_key'),
           ...(maxTotalUnits !== undefined ? { max_total_units: maxTotalUnits } : {}),
-        }, { 'Idempotency-Key': requireText(req.idempotencyKey, 'idempotency key') }),
+        }, { 'Idempotency-Key': requireText(req.idempotencyKey, 'idempotency key') }, cfg.jobOpenTimeoutMs ?? 90_000),
       );
       const protocol = requireText(raw['protocol'], 'protocol');
       if (protocol !== 'paid-job/v1') {
@@ -348,10 +369,12 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
       };
     },
 
-    async listCapabilities(): Promise<LocCapability[]> {
+    async listCapabilities(): Promise<LocCapabilityCatalog> {
       const raw = asRecord(await call('GET', '/v1/capabilities'));
-      const items = Array.isArray(raw['items']) ? raw['items'] : [];
-      return items.map((item) => {
+      if (!Array.isArray(raw['items'])) throw invalidContract('missing capability items');
+      const catalog = parseCatalogMetadata(raw['catalog']);
+      const items = raw['items'];
+      return { catalog, items: items.map((item) => {
         const cap = asRecord(item);
         const offerings = Array.isArray(cap['offerings']) ? cap['offerings'] : [];
         const capabilityEstimator = parseWorkUnitEstimator(cap['work_unit_estimator']);
@@ -375,7 +398,7 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
             };
           }),
         };
-      });
+      }) };
     },
 
     async listOrchestrators(capability?: string): Promise<LocOrchestrator[]> {
@@ -409,6 +432,33 @@ export function createLocClient(cfg: LocClientConfig): LocClient {
         env: str(raw['env']),
       };
     },
+  };
+}
+
+function parseCatalogMetadata(value: unknown): LocCatalogMetadata | null {
+  if (value == null) return null;
+  const raw = asRecord(value);
+  const completeness = raw['completeness'];
+  if (completeness !== 'COMPLETE' && completeness !== 'PARTIAL' && completeness !== 'UNINITIALIZED') {
+    throw invalidContract('invalid catalog completeness');
+  }
+  const coverage: Record<string, number> = {};
+  for (const [key, count] of Object.entries(asRecord(raw['coverage']))) {
+    coverage[key] = requireSafeUnsignedInteger(count, `catalog.coverage.${key}`);
+  }
+  const timestamp = (key: string): string | null =>
+    raw[key] == null ? null : requireTimestamp(raw[key], `catalog.${key}`);
+  return {
+    completeness,
+    stale: requireBoolean(raw['stale'], 'catalog.stale'),
+    coverage,
+    snapshot_at: timestamp('snapshot_at'),
+    evaluated_at: requireTimestamp(raw['evaluated_at'], 'catalog.evaluated_at'),
+    discovery_scope: requireText(raw['discovery_scope'], 'catalog.discovery_scope'),
+    discovery_scope_authoritative: requireBoolean(raw['discovery_scope_authoritative'], 'catalog.discovery_scope_authoritative'),
+    discovery_observed_at: timestamp('discovery_observed_at'),
+    discovery_valid_until: timestamp('discovery_valid_until'),
+    coverage_valid_until: timestamp('coverage_valid_until'),
   };
 }
 

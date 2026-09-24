@@ -128,6 +128,7 @@ the advertised exact estimator; missing metadata is a pre-payment 503.
 LOC_BASE_URL=http://127.0.0.1:8088      # localhost pilot
 LOC_API_KEY=…                           # required; sent as X-API-Key
 LOC_TIMEOUT_MS=30000
+LOC_JOB_OPEN_TIMEOUT_MS=90000           # selection + authorization + funding
 LOC_SETTLE_INTERVAL_MS=15000            # background settler cadence
 LOC_SETTLE_ALERT_ATTEMPTS=20            # alert threshold; retries do not abandon
 LOC_OPEN_MAX_ATTEMPTS=3                 # identical idempotent, backoff-spaced attempts
@@ -607,3 +608,47 @@ only when no v2 accounting identity can be lost.
 - **DDoS protection**. Front-edge concern (Cloudflare / Fastly).
 - **Multi-region**. Replicate Postgres + run a gateway near each
   region; not in scope here.
+
+## September 2026 upstream compatibility
+
+Deploy the service-registry daemon with `ListOfferings` support (network-modules
+`e9f08e4` or later) before LOC `9150afc` or later. LOC no longer falls back to
+network crawling when that RPC is unavailable. Upgrade the broker and payment
+daemon together for fenced rejected-admission recovery (`08f5985` or later),
+then deploy LOC with verified non-admission recovery (`81535e2` or later).
+Use immutable image digests corresponding to these commits or newer releases;
+shared version labels alone do not establish compatibility.
+
+`LOC_JOB_OPEN_TIMEOUT_MS` defaults to 90000 and covers selection, authorization,
+and funding; other calls retain `LOC_TIMEOUT_MS=30000`. LOC's selection deadline
+alone defaults to 45 seconds. Size the job-open budget above the configured LOC
+selection deadline plus authorization/funding latency, and align reverse-proxy
+request deadlines. The recovery grace period includes all foreground attempts.
+
+LOC `fade802` checks receiver credit against the authorization's maximum debit.
+Size LOC per-payee, aggregate, and single-funding limits for the maximum request
+units (including chat completion budgets), not just estimated usage. A
+`WHOLESALE_FUNDING_UNVERIFIED` response remains retryable with the same job-open
+idempotency key; never increase funding ceilings automatically in the gateway.
+
+Admin registry candidates and summary responses include LOC `catalog` metadata.
+Fresh COMPLETE snapshots replace the model cache, including authoritative empty
+results. Fresh PARTIAL or legacy snapshots only upsert listed models; omissions
+remain until a complete snapshot confirms absence. Stale, expired-coverage, and
+UNINITIALIZED snapshots leave the cache untouched. Persisted timestamps reflect
+the upstream snapshot (or evaluation timestamp), not the time of a cache read.
+LOC still selects and authorizes every paid route independently of this catalog.
+
+After grant expiry, LOC can close rejected jobs using verified, fenced
+NOT_ADMITTED evidence and release the hold with zero billed usage. The gateway
+records that closed LOC state; it does not manufacture broker settlement evidence
+or issue refunds from an unsigned refusal.
+
+Network-modules `747a085` also repairs paid-session revision/winddown recovery.
+For shared infrastructure, deploy its payment receiver before the broker, following
+upstream's operator runbook. This gateway exposes paid-job/v1 only. Receiver credit
+readiness remains a point-in-time check under competing authorizations (LOC
+`loc-8v4`); retain rejected-admission recovery even after the funding fix.
+
+See [the September 24 review](./docs/references/2026-09-24-upstream-compatibility.md)
+for source revisions, local validation, and remaining production release gates.

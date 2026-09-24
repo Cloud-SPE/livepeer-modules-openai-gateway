@@ -10,6 +10,7 @@ import {
   dispatchReqresp,
   isAccountingReplay,
   jobRefFromError,
+  jobOpenRecoveryGraceMs,
 } from '../src/loc/dispatch.js';
 import { LocApiError, type LocClient, type OpenJobRequest, type OpenJobResponse, type SettleJobRequest } from '../src/loc/client.js';
 import { LivepeerBrokerError } from '../src/proxy/livepeer/errors.js';
@@ -93,7 +94,7 @@ function fakeLoc(
       };
     },
     async listCapabilities() {
-      return [];
+      return { items: [], catalog: null };
     },
     async listOrchestrators() {
       return [];
@@ -538,4 +539,12 @@ test('FormData is serialized once before durable open intent and broker dispatch
     assert.equal(requests[0]!.headers['livepeer-payment'],undefined);
     assert.ok(requests[0]!.headers['livepeer-caller-proof']);
   });
+});
+
+
+test('open recovery grace covers configured timeouts and the full retry schedule', () => {
+  assert.equal(jobOpenRecoveryGraceMs(1000, 1), 300_000);
+  assert.equal(jobOpenRecoveryGraceMs(90_000, 3), 330_750);
+  // Ten attempts have nine waits, totaling 127750 ms, not 2000 per attempt.
+  assert.equal(jobOpenRecoveryGraceMs(90_000, 10), 1_087_750);
 });

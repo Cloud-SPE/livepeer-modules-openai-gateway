@@ -14,6 +14,7 @@ plan under `docs/exec-plans/active/`; completed plans move to
 
 | Plan | Date | Summary |
 |---|---|---|
+| [`0008-upstream-catalog-recovery`](./docs/exec-plans/completed/0008-upstream-catalog-recovery.md) | 2026-09-24 | Catalog freshness/completeness, independent open timeout, recovery grace, and zero-billed accounting regression coverage. 149 tests pass with Postgres; production gates remain in 0007. |
 | [`0001-v1-hardening`](./docs/exec-plans/completed/0001-v1-hardening.md) | 2026-05-18 | Closed the gap from "scaffold passes smoke" to "ready for first real user": enriched `/health`, per-API-key rate limit, DEPLOYMENT runbook, 4 design docs + 4 product specs, LICENSE + CONTRIBUTING. |
 | [`0002-openapi-spec`](./docs/exec-plans/completed/0002-openapi-spec.md) | 2026-05-18 | OpenAPI 3.1 spec for `/api/*` + `/portal/*` + `/admin/*` via `@fastify/swagger` + `fastify-type-provider-zod`. Migrated 19 routes to schema-based registration; `/openapi.json` + `/docs` served. |
 | [`0004-registry-catalog-split`](./docs/exec-plans/completed/0004-registry-catalog-split.md) | 2026-05-19 | Split the snapshot/catalog resolver path out of `RouteSelector`, added a dedicated `RegistryCatalog`, and moved `/v1/models` refresh plus admin candidate inspection onto that surface. |

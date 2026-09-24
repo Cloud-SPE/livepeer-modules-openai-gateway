@@ -40,7 +40,7 @@ export interface ResolveInput {
 export async function resolveRoute(input: ResolveInput): Promise<ResolvedRoute> {
   let candidates: RouteCandidate[] = [];
   try {
-    candidates = await input.catalog.inspect();
+    candidates = (await input.catalog.inspect()).candidates;
   } catch {
     // Catalog unreachable — fall through to map/identity below; the
     // LOC job open will surface the real error if the LOC is down.

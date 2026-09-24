@@ -57,7 +57,7 @@ function fakeLoc(
       };
     },
     async listCapabilities() {
-      return [];
+      return { items: [], catalog: null };
     },
     async listOrchestrators() {
       return [];

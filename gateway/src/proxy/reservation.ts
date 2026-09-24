@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerDeps } from '../server.js';
 import * as usageRepo from '../repo/usageReservations.js';
 import { proxyReservationsTotal } from '../metrics.js';
-import type { JobRef, RouteCandidate } from '../loc/dispatch.js';
+import { jobOpenRecoveryGraceMs, type JobRef, type RouteCandidate } from '../loc/dispatch.js';
 
 export interface OpenReservationInput {
   apiKeyId: string;
@@ -150,5 +150,5 @@ function bytesToHex(bytes: Uint8Array): string | null {
 export async function recordJobPrepared(deps: ServerDeps, handle: ReservationHandle,
   request: import('../loc/client.js').OpenJobRequest): Promise<void> {
   await usageRepo.recordOpenIntent(deps.db, handle.workId, request,
-    Math.max(300_000, (deps.config.locTimeoutMs + 2_000) * deps.config.locOpenMaxAttempts + 60_000));
+    jobOpenRecoveryGraceMs(deps.config.locJobOpenTimeoutMs, deps.config.locOpenMaxAttempts));
 }

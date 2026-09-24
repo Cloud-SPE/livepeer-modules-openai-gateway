@@ -23,13 +23,13 @@ export async function loadActiveModelHealth(
   db: Db,
   registryCatalog: RegistryCatalog,
 ): Promise<ActiveModelHealth[]> {
-  const [rows, liveCandidates] = await Promise.all([
+  const [rows, snapshot] = await Promise.all([
     modelsRepo.listActive(db),
     registryCatalog.inspect(),
   ]);
 
   return rows.map((row) => {
-    const matches = candidatesForModel(liveCandidates, row.capability, row.modelId);
+    const matches = candidatesForModel(snapshot.candidates, row.capability, row.modelId);
     return {
       id: row.modelId,
       capability: row.capability,
