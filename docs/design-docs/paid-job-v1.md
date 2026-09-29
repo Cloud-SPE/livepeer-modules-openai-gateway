@@ -132,3 +132,19 @@ image build, production interoperability, and immutable multi-service release
 certification are distinct evidence. Drain old work, back up all affected
 ledgers and follow upstream settlement-domain migration guidance before a
 coordinated production upgrade. The gateway does not upgrade upstream ledgers.
+
+## Shared-wallet authorizations
+
+The current upstream authorization domain is `livepeer-spend-authorization/v3`.
+LOC selects a stable wholesale account and binds it in the signed authorization,
+settlement, and non-admission evidence. The gateway preserves authorization bytes
+and full signed envelopes; invocation-proof/v1 covers the exact authority bytes.
+LOC validates account identity against the persisted grant. A gateway API key is
+not a wholesale account, and the ephemeral caller key is not a payment wallet.
+
+No separate trusted account field is currently exposed by LOC's job response.
+The gateway does not infer account identity from deployment configuration or
+rewrite evidence to match it. Independent local account validation/diagnostics
+would require an explicit trusted metadata contract or reviewed authorization
+decoding. See the [cutover guidance](../../DEPLOYMENT.md#shared-wallet-cutover-september-26-2026)
+and [validation record](../references/2026-09-26-shared-wallet-compatibility.md).

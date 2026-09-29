@@ -1,0 +1,95 @@
+{
+  "loc_revision": "fe55795add9505ecd74082026d019890f182b95b",
+  "source_sha256": {
+    "tests/fixtures/signed_settlement.py": "3281e40be4f3eb1b5481c44de1936d71cec70e2acd7c5a120277f995e90a1bd9",
+    "src/livepeer_open_clearinghouse/providers/settlement_verification.py": "d381f86b16d5d6b1679a59ea8d56c358168dc6c31cb2de19212230ce46e240e0",
+    "src/livepeer_open_clearinghouse/_gen/livepeer/payments/v1/types_pb2.py": "d0aba56ab65ac5371b6421fc613b0b61bf4b5b4d71d800cff9cbc7364223148f"
+  },
+  "authorization_domain": "livepeer-spend-authorization/v3",
+  "account_id": "loc-test-a",
+  "caller_private_key": "0202020202020202020202020202020202020202020202020202020202020202",
+  "caller_public_key": "024d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+  "payer_public_key": "031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
+  "body": "{\"model\":\"fixture-model\",\"messages\":[{\"role\":\"user\",\"content\":\"fixture\"}]}",
+  "request_digest": "94f8b37dc483fdeeeda0cab0459888cb3b7a0078fdcbc82c1f28e0fc8309ce74",
+  "authorization": "CooECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhQaZC8OPDr1ReesvTiwclGzmQkU8RoUEREREREREREREREREREREREREREiBndvcmstMSoJcmVxdWVzdC0xOgtwYWlkLWpvYi92MUIXb3BlbmFpOmNoYXQtY29tcGxldGlvbnNKDWZpeHR1cmUtbW9kZWxSgwEKAwoBARABGgV0b2tlbiIXb3BlbmFpOmNoYXQtY29tcGxldGlvbnMqDWZpeHR1cmUtbW9kZWwySwoDcS0xEAEaIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiAREREREREREREREREREREREREREREREREREREREREREVoDCgFkYGRqFDIwMjYtMDgtMjBUMTE6NTk6MDBachQyMDI2LTA4LTIwVDEyOjA1OjAwWnoglPizfcSD/e7toMqwRZiIyzt6AHj9y8gsHyjg/IMJznSCASECTUts0TYQMsqb0q652QCqTUXZ6tgKyUIzdMRRpyVNB2aaARZodHRwczovL2Jyb2tlci5leGFtcGxloAGxyQKqAQN3ZWmyAUIweGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWG6AQpsb2MtdGVzdC1hEkEu1Zz+YX+4uzHLtQEj8qWD+JtbVPNpOSGlOaU2X4Ih3Ecb7NQPRacmqSTIdc7rYKLBU6S27/s6nbG1YUyCuwOpGw==",
+  "other_account_authorization": "CooECh9saXZlcGVlci1zcGVuZC1hdXRob3JpemF0aW9uL3YzEhQaZC8OPDr1ReesvTiwclGzmQkU8RoUEREREREREREREREREREREREREREiBndvcmstMSoJcmVxdWVzdC0xOgtwYWlkLWpvYi92MUIXb3BlbmFpOmNoYXQtY29tcGxldGlvbnNKDWZpeHR1cmUtbW9kZWxSgwEKAwoBARABGgV0b2tlbiIXb3BlbmFpOmNoYXQtY29tcGxldGlvbnMqDWZpeHR1cmUtbW9kZWwySwoDcS0xEAEaIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIiAREREREREREREREREREREREREREREREREREREREREREVoDCgFkYGRqFDIwMjYtMDgtMjBUMTE6NTk6MDBachQyMDI2LTA4LTIwVDEyOjA1OjAwWnoglPizfcSD/e7toMqwRZiIyzt6AHj9y8gsHyjg/IMJznSCASECTUts0TYQMsqb0q652QCqTUXZ6tgKyUIzdMRRpyVNB2aaARZodHRwczovL2Jyb2tlci5leGFtcGxloAGxyQKqAQN3ZWmyAUIweGFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWG6AQpsb2MtdGVzdC1iEkHZ1/V/mxsJBlpkjqCD2+5bu6mrufjXQzz/htL/Z3/0tVpdO4nuQObcLREa0py0kYkdp7hcgJgFcEee17FEz9JrGw==",
+  "settlement": {
+    "payload": {
+      "accepted_quote_ref": {
+        "quote_id": "q-1",
+        "quote_version": "1",
+        "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+      },
+      "work_unit_name": "token",
+      "estimated_units": "5",
+      "actual_units": "5",
+      "billed_units": "5",
+      "debited_units": "5",
+      "payment_cumulative_units": "0",
+      "funded_value_wei": {
+        "value": "AQ=="
+      },
+      "billed_value_wei": {
+        "value": "BQ=="
+      },
+      "outcome": "EXACT",
+      "work_id": "work-1",
+      "issued_at": "2026-08-20T12:00:00Z",
+      "job_id": "broker-job-1",
+      "request_id": "request-1",
+      "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "wholesale_account_id": "loc-test-a",
+      "authorization_id": "work-1",
+      "authorized_value_wei": {
+        "value": "ZA=="
+      },
+      "reserved_value_wei": {
+        "value": "ZA=="
+      },
+      "released_value_wei": {
+        "value": "Xw=="
+      },
+      "account_funding_value_wei": {
+        "value": ""
+      },
+      "account_version": "0"
+    },
+    "signature": {
+      "algorithm": "secp256k1",
+      "canonicalization": "jcs",
+      "value": "0xdd9127913274ae8755dd2b56dfd0ca28673e86ec287cdf1dc27cbfe9e148df1673fa1fc4eed0fda39b48b85ff8cc73fe2d0ddc8f22cffda308e6de19aa0fbac31c"
+    }
+  },
+  "non_admission": {
+    "payload": {
+      "protocol": "paid-job/v1",
+      "request_id": "request-1",
+      "work_id": "work-1",
+      "sender": "qqqqqqqqqqqqqqqqqqqqqqqqqqo=",
+      "recipient": "ERERERERERERERERERERERERERE=",
+      "accepted_quote_ref": {
+        "quote_id": "q-1",
+        "quote_version": "1",
+        "constraint_fingerprint": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "route_fingerprint": "ERERERERERERERERERERERERERERERERERERERERERE="
+      },
+      "broker_eth_address": "0x1111111111111111111111111111111111111111",
+      "observed_at": "2026-08-20T12:00:00Z",
+      "coverage_started_at": "2026-05-01T00:00:00Z",
+      "outcome": "NOT_ADMITTED",
+      "settlement_domain_id": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "wholesale_account_id": "loc-test-a"
+    },
+    "signature": {
+      "algorithm": "secp256k1",
+      "canonicalization": "jcs",
+      "value": "0x382eef808f435c4046f5bd2d6a8d9697ff837f315ad5c674956e2e474dacf0e4362306fe1a5eaa27e2ea383cff2440c9b2d2c4bd44f6095368232829c3ec6a221c"
+    }
+  },
+  "verified_rejections": [
+    "wholesale_account_mismatch",
+    "wholesale_account_mismatch"
+  ]
+}

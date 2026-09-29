@@ -1,0 +1,56 @@
+{
+  "observed_on": "2026-09-26",
+  "scope": "Local Docker image inspection; not a certified deployment set",
+  "images": [
+    {
+      "service": "livepeer-payment-daemon",
+      "image_id": "sha256:b9cc660d2f4a9aff57b1db700183879b86ef4806937480a1910e558be4d0ef85",
+      "repo_digests": [
+        "tztcloud/livepeer-payment-daemon@sha256:c1d88fdbbb8e3123c7e68a8128a2af2b4742a98ec3e7d34d29b5bb842a77129f"
+      ],
+      "architecture": "amd64",
+      "source_revision_label": null,
+      "reported_version": "v2.1.0-b15ff35c2fae"
+    },
+    {
+      "service": "livepeer-capability-broker",
+      "image_id": "sha256:e8aca7aa930db939b5a7c46a87443eff5bc2912b3d121555ed8e10a165c56c58",
+      "repo_digests": [
+        "tztcloud/livepeer-capability-broker@sha256:6f4b7753e157be21038ba316eab37f8c72df6ff387bb5f6b3b4deb68d917b0da"
+      ],
+      "architecture": "amd64",
+      "source_revision_label": null,
+      "reported_version": "v2.1.0-b15ff35c2fae"
+    },
+    {
+      "service": "livepeer-service-registry-daemon",
+      "image_id": "sha256:d195f41a128dc932858367bf02fb811acbd14b76df7e9ac47bbea8c28063462c",
+      "repo_digests": [
+        "tztcloud/livepeer-service-registry-daemon@sha256:961cac159884b1c8100125ba51a8eb5b4c77bd6cf150733a68c8c19d32af3443"
+      ],
+      "architecture": "amd64",
+      "source_revision_label": null,
+      "reported_version": null
+    },
+    {
+      "service": "livepeer-open-clearinghouse-gateway",
+      "image_id": "sha256:1ac6724777674929fe8ff17e97186671cff7eb2561019e1b0fe43e1b18a2e004",
+      "repo_digests": [
+        "tztcloud/livepeer-open-clearinghouse-gateway@sha256:e50023169b5e6408bae00afa3995e262d7c168078b64ebd832d4ace7052c4692"
+      ],
+      "architecture": "amd64",
+      "source_revision_label": "fe55795add9505ecd74082026d019890f182b95b",
+      "reported_version": null
+    },
+    {
+      "service": "livepeer-conformance",
+      "image_id": "sha256:0b8956f2a35cbfe8a69a5c8962e4d328913a4de7d48c39ae13b2e9106fd1377e",
+      "repo_digests": [
+        "tztcloud/livepeer-conformance@sha256:7147029220987414b16dfdaf17906d3d9665f24122671ee13fd14bed271ec44d"
+      ],
+      "architecture": "amd64",
+      "source_revision_label": null,
+      "reported_version": null
+    }
+  ]
+}

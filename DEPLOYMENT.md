@@ -177,15 +177,11 @@ serving users:
 make loc-smoke   # executes a paid job and submits its signed settlement
 ```
 
-The pilot supports `openai:chat-completions/default` over unary and stream.
-LOC now passes the `multipart-audio-duration/v1` estimator metadata through,
-and this gateway reproduces that ceiling locally without a Modules runtime or
-build dependency. LOC's 14/14 real-process matrix passes against clean Modules
-`215e8a4`, including the payment expected-value and broker terminal-evidence
-fixes. Modules release record `1241d76` publishes immutable digests from that
-source. Pin those digests rather than mutable `v2.0.0` tags, then require the
-image-based unary/stream/multipart conformance pass before advertising
-transcription as ready.
+The historical August pilot covered `openai:chat-completions/default` and
+transcription estimator propagation. Its Modules `215e8a4` / release `1241d76`
+results do not certify shared-wallet authorization v3. For current source and
+artifact evidence and the required coordinated cutover, see
+[shared-wallet compatibility](./docs/references/2026-09-26-shared-wallet-compatibility.md).
 
 After startup the gateway is real. Don't ship to users until you've
 done the **real-broker validation** below.
@@ -652,3 +648,61 @@ readiness remains a point-in-time check under competing authorizations (LOC
 
 See [the September 24 review](./docs/references/2026-09-24-upstream-compatibility.md)
 for source revisions, local validation, and remaining production release gates.
+
+## Shared-wallet cutover (September 26, 2026)
+
+Shared-wallet releases require named wholesale accounts and spend-authorization
+v3. This is a coordinated accounting cutover even though the public OpenAI API
+and `paid-job/v1` name are unchanged. The September 24 minimum revisions above
+are insufficient for shared-wallet compatibility. Use the
+[shared-wallet evidence record](./docs/references/2026-09-26-shared-wallet-compatibility.md)
+for inspected image digests and the outstanding release gates.
+
+Configure **LOC**, in its own deployment, with a stable `WHOLESALE_ACCOUNT_ID`:
+`loc-prod` for production and a distinct `loc-dev-<installation>` for each
+independent development installation. Valid labels contain 1–128 ASCII letters,
+digits, dots, underscores, colons, or hyphens. LOC startup with a real payer
+requires this setting. It is not a gateway environment variable or an API-key
+property: multiple gateway keys using the same LOC share its wholesale account.
+Customer credit remains in LOC's separate retail ledger.
+
+Each independent payer daemon needs its own persistent database. The daemon
+creates and retains `ticket_stream_id`; operators must not clone a running
+sender database into another installation or change accounts to bypass uncertain
+funding. Restart with the original database to recover pending mints. Once exact
+payment bytes are retained, LOC replays them to recover the original funding
+receipt. Account labels isolate credit and nonce bookkeeping; the private key and
+on-chain deposit remain shared spending authority. Use separate wallets or a
+common signer when enforced spending isolation is required.
+
+Cutover procedure:
+
+1. Stop new gateway inference and upstream funding. Keep accounting workers
+   running against the old stack until active grants and uncertain funding are
+   settled or explicitly reconciled. Reconcile and drain old broker credit using
+   the old release; a gateway queue alone cannot certify the upstream ledgers.
+2. Back up gateway Postgres, LOC Postgres, and payer/receiver/broker persistent
+   ledgers. Preserve unresolved evidence. Do not delete records to pass a gate.
+3. Apply LOC migration `0029` only after its drain preconditions pass: it refuses
+   pending funding and nonterminal grants. Legacy balances/history retain an
+   empty account label. New named accounts start at zero; the migration neither
+   transfers old credit nor supports merging isolated accounts on downgrade.
+4. Upgrade compatible receiver, broker, payer, and LOC artifacts while traffic
+   remains stopped, following each upstream migration/runbook. Mixed peers that
+   lack account echoes or `isolation_version=1` fail closed. Preserve daemon
+   databases and verify current migration requirements for the selected release.
+5. Verify the configured account, balances, route availability, and signed
+   unary/SSE/multipart settlement with immutable artifacts. Resume traffic only
+   after the release gates in plan 0007 pass. Recover by fixing forward; do not
+   collapse accounts or replay customer workloads to resolve accounting.
+
+The smoke tool can assert the intended account after LOC accepts the signed
+settlement (so a diagnostic failure does not leave the completed job unsettled):
+
+```bash
+LOC_SMOKE_EXPECTED_WHOLESALE_ACCOUNT_ID=loc-prod make loc-smoke
+```
+
+This executes a paid request using the existing LOC credential and configured
+smoke offering. A matching account assertion covers this one request; it does not
+certify cross-account isolation, all endpoints, or the full release set.

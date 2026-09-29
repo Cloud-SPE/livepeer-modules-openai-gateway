@@ -14,6 +14,7 @@ plan under `docs/exec-plans/active/`; completed plans move to
 
 | Plan | Date | Summary |
 |---|---|---|
+| [`0009-shared-wallet-compatibility`](./docs/exec-plans/completed/0009-shared-wallet-compatibility.md) | 2026-09-26 | Signed v3/account fixture coverage, Postgres preservation, account-aware smoke check, cutover guidance, and inspected image evidence. 154 tests pass; live release gates remain in 0007. |
 | [`0008-upstream-catalog-recovery`](./docs/exec-plans/completed/0008-upstream-catalog-recovery.md) | 2026-09-24 | Catalog freshness/completeness, independent open timeout, recovery grace, and zero-billed accounting regression coverage. 149 tests pass with Postgres; production gates remain in 0007. |
 | [`0001-v1-hardening`](./docs/exec-plans/completed/0001-v1-hardening.md) | 2026-05-18 | Closed the gap from "scaffold passes smoke" to "ready for first real user": enriched `/health`, per-API-key rate limit, DEPLOYMENT runbook, 4 design docs + 4 product specs, LICENSE + CONTRIBUTING. |
 | [`0002-openapi-spec`](./docs/exec-plans/completed/0002-openapi-spec.md) | 2026-05-18 | OpenAPI 3.1 spec for `/api/*` + `/portal/*` + `/admin/*` via `@fastify/swagger` + `fastify-type-provider-zod`. Migrated 19 routes to schema-based registration; `/openapi.json` + `/docs` served. |

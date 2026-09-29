@@ -6,6 +6,8 @@ import { sql } from 'drizzle-orm';
 import { createPool, createDb, runMigrations } from '../src/db.js';
 import * as repo from '../src/repo/usageReservations.js';
 import { commitment, routeSnapshot } from './wholesale-fixtures.js';
+import fixture from './fixtures/shared-wallet.json' with { type: 'json' };
+import { decodeSignedSettlement } from '../src/loc/brokerSettlement.js';
 
 const testUrl = process.env['TEST_DATABASE_URL'];
 test('Postgres preserves historical rows, rejects domain drift, and recovers NO_RECORD accounting', {skip:!testUrl}, async()=>{
@@ -87,12 +89,37 @@ test('Postgres closes zero-billed rejected admissions without inventing broker e
     const id = randomUUID(), key = randomUUID(), work = randomUUID();
     await db.execute(sql`INSERT INTO waitlist(id,name,email,status) VALUES(${id},'fixture',${id+'@example.invalid'},'approved')`);
     await db.execute(sql`INSERT INTO api_keys(id,waitlist_id,key_prefix,key_hash) VALUES(${key},${id},'test',${id})`);
-    const inserted = await db.execute(sql`INSERT INTO usage_reservations(work_id,api_key_id,capability,model,loc_job_id,loc_request_id,payment_work_id) VALUES(${work},${key},'c','o','rejected-job','rejected-request','rejected-auth') RETURNING id`);
+    const inserted = await db.execute(sql`INSERT INTO usage_reservations(work_id,api_key_id,capability,model,loc_job_id,loc_request_id,payment_work_id) VALUES(${work},${key},'c','o','rejected-job','request-1','work-1') RETURNING id`);
     const reservationId = inserted.rows[0]!.id as string;
-    await repo.recordSettlementLookupTerminal(db, reservationId, 'not_admitted', 'signed audit only', 'signed-non-admission');
-    await repo.recordLocStatus(db, reservationId, { jobId: 'rejected-job', requestId: 'rejected-request', workId: 'rejected-auth', state: 'closed', accountingOutcome: 'broker_settled', actualUnits: '0', billedValueWei: '0', closedAt: '2026-09-24T12:00:00Z' });
+    const audit = Buffer.from(JSON.stringify(fixture.non_admission)).toString('base64');
+    await repo.recordSettlementLookupTerminal(db, reservationId, 'not_admitted', 'signed audit only', audit);
+    await repo.recordLocStatus(db, reservationId, { jobId: 'rejected-job', requestId: 'request-1', workId: 'work-1', state: 'closed', accountingOutcome: 'broker_settled', actualUnits: '0', billedValueWei: '0', closedAt: '2026-09-24T12:00:00Z' });
     const result = await db.execute(sql`SELECT settle_state,loc_settled_units,loc_billed_value_wei,broker_actual_units,settlement_envelope,terminal_evidence_encoded FROM usage_reservations WHERE id=${reservationId}`);
-    assert.deepEqual(result.rows[0], { settle_state: 'settled', loc_settled_units: '0', loc_billed_value_wei: '0', broker_actual_units: null, settlement_envelope: null, terminal_evidence_encoded: 'signed-non-admission' });
+    assert.deepEqual(result.rows[0], { settle_state: 'settled', loc_settled_units: '0', loc_billed_value_wei: '0', broker_actual_units: null, settlement_envelope: null, terminal_evidence_encoded: audit });
     assert.ok(!(await repo.pendingLocStatuses(db, 100)).some(row => row.id === reservationId));
+    await db.execute(sql`DELETE FROM usage_reservations WHERE id=${reservationId}`);
   } finally { await pool.end(); }
+});
+
+
+test('Postgres retains v3 authority and signed account metadata through settlement recovery', { skip: !testUrl }, async () => {
+  const pool = createPool(testUrl!);
+  const db = createDb(pool);
+  const id = randomUUID(), key = randomUUID(), work = randomUUID();
+  try {
+    await runMigrations(db, { migrationsDir: fileURLToPath(new URL('../../migrations/', import.meta.url)) });
+    await db.execute(sql`INSERT INTO waitlist(id,name,email,status) VALUES(${id},'fixture',${id+'@example.invalid'},'approved')`);
+    await db.execute(sql`INSERT INTO api_keys(id,waitlist_id,key_prefix,key_hash) VALUES(${key},${id},'test',${id})`);
+    const inserted = await db.execute(sql`INSERT INTO usage_reservations(work_id,api_key_id,capability,model,loc_job_id,loc_request_id,payment_work_id,selected_work_unit,settlement_domain_id,spend_authorization)
+      VALUES(${work},${key},'openai:chat-completions','fixture-model','fixture-job','request-1','work-1','token',${fixture.settlement.payload.settlement_domain_id},${fixture.authorization}) RETURNING id`);
+    const encoded = Buffer.from(JSON.stringify(fixture.settlement)).toString('base64');
+    await repo.recordSettlementEvidence(db, inserted.rows[0]!.id as string, { encoded, ...decodeSignedSettlement(encoded) });
+    const result = await db.execute(sql`SELECT spend_authorization,settlement_envelope,settlement_encoded FROM usage_reservations WHERE work_id=${work}`);
+    assert.deepEqual(result.rows[0], { spend_authorization: fixture.authorization, settlement_envelope: fixture.settlement, settlement_encoded: encoded });
+  } finally {
+    await db.execute(sql`DELETE FROM usage_reservations WHERE work_id=${work}`);
+    await db.execute(sql`DELETE FROM api_keys WHERE id=${key}`);
+    await db.execute(sql`DELETE FROM waitlist WHERE id=${id}`);
+    await pool.end();
+  }
 });

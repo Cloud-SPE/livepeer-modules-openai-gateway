@@ -18,6 +18,10 @@ const baseUrl = requiredEnv('LOC_BASE_URL');
 const apiKey = requiredEnv('LOC_API_KEY');
 const capability = process.env['LOC_SMOKE_CAPABILITY'] ?? 'openai:chat-completions';
 const offering = process.env['LOC_SMOKE_OFFERING'] ?? 'default';
+const expectedAccount = process.env['LOC_SMOKE_EXPECTED_WHOLESALE_ACCOUNT_ID'];
+if (expectedAccount !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(expectedAccount)) {
+  fail('LOC_SMOKE_EXPECTED_WHOLESALE_ACCOUNT_ID must be a valid upstream account label');
+}
 const lookupAttempts = positiveIntEnv('LOC_SMOKE_LOOKUP_ATTEMPTS', 60);
 const estimatedUnits = positiveIntEnv('LOC_SMOKE_ESTIMATED_UNITS', 64);
 const maxTotalUnits = positiveIntEnv('LOC_SMOKE_MAX_TOTAL_UNITS', 256);
@@ -90,6 +94,12 @@ async function main(): Promise<void> {
       settlement: evidence.envelope as unknown as SettlementEnvelope,
     },
   );
+  // Settle first so a diagnostic mismatch never strands the completed paid job.
+  const signedAccount = (evidence.envelope['payload'] as Record<string, unknown>)['wholesale_account_id'];
+  if (expectedAccount !== undefined && signedAccount !== expectedAccount) {
+    fail(`LOC settled the job, but signed wholesale account ${String(signedAccount)} differs from expected ${expectedAccount}`);
+  }
+  if (typeof signedAccount === 'string') pass(`LOC accepted signed wholesale account ${signedAccount}`);
   pass(
     `LOC settled signed ${evidence.outcome}: actual=${settled.actualUnits} ` +
       `${evidence.workUnit}, billed=${settled.billedValueWei} wei, refund=${settled.refundWei} wei`,
